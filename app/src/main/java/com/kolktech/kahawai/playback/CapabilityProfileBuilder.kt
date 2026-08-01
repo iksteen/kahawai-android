@@ -57,10 +57,12 @@ object CapabilityProfileBuilder {
             maxFps = display?.refreshRate?.roundToInt(),
             hdr = hdr,
             maxBandwidthKbps = null,
-            // Subtitle rendering isn't built yet — never claim a tier the
-            // client can't actually render.
-            assRender = false,
-            graphicsOverlay = false,
+            // Faithful ASS (libass, ass-kt) and bitmap-overlay (PGS/VobSub
+            // display-set) rendering are both wired into the player now —
+            // claim the richest tier the hub can offer instead of forcing
+            // everything through flattened VTT or a burned-in encode.
+            assRender = true,
+            graphicsOverlay = true,
         )
     }
 

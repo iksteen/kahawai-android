@@ -63,5 +63,15 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
 
+    // Faithful ASS/SSA subtitle rendering (libass). ass-media isn't wired
+    // into the RenderersFactory — the hub's ASS tracks arrive out-of-band
+    // (a streamed .ass tap keyed to a track id), not muxed into the HLS
+    // stream, so AssHandler/AssTrack are driven directly instead of
+    // through Media3's own track/renderer pipeline. The dependency is
+    // still needed for AssSubtitleView/AssHandler (render + overlay view).
+    implementation(libs.ass)
+    implementation(libs.ass.kt)
+    implementation(libs.ass.media)
+
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

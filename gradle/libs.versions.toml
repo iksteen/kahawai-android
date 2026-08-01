@@ -19,6 +19,10 @@ coil = "3.1.0"
 datastorePreferences = "1.2.1"
 tink = "1.23.0"
 coroutines = "1.10.1"
+# libass for Android (MIT) — faithful ASS/SSA rendering (styling, fonts,
+# positioning). Prebuilt native .so + Kotlin wrapper published to Maven
+# Central; no NDK/CMake needed on our side. https://github.com/peerless2012/libass-android
+libassAndroid = "0.5.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -48,6 +52,9 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
+ass = { group = "io.github.peerless2012", name = "ass", version.ref = "libassAndroid" }
+ass-kt = { group = "io.github.peerless2012", name = "ass-kt", version.ref = "libassAndroid" }
+ass-media = { group = "io.github.peerless2012", name = "ass-media", version.ref = "libassAndroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

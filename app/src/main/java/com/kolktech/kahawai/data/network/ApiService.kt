@@ -8,10 +8,12 @@ import com.kolktech.kahawai.data.network.dto.LibrariesResponse
 import com.kolktech.kahawai.data.network.dto.LoginRequest
 import com.kolktech.kahawai.data.network.dto.ProgressRequest
 import com.kolktech.kahawai.data.network.dto.RefreshRequest
+import com.kolktech.kahawai.data.network.dto.FontsResponse
 import com.kolktech.kahawai.data.network.dto.SeekRequest
 import com.kolktech.kahawai.data.network.dto.SeekResponse
 import com.kolktech.kahawai.data.network.dto.StartSessionRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
+import com.kolktech.kahawai.data.network.dto.SubtitlesResponse
 import com.kolktech.kahawai.data.network.dto.TokenPair
 import retrofit2.http.Body
 import retrofit2.http.DELETE
@@ -50,6 +52,21 @@ interface ApiService {
 
     @GET("api/v1/items/{id}/children")
     suspend fun children(@Path("id") id: String): ChildrenResponse
+
+    /// Track list + computed delivery for THIS client (tracks.rs
+    /// delivery()); `.vtt`/`.ass` bodies and the session-scoped
+    /// `subs-{id}.{ass,jsonl}` taps are raw text/binary/streaming, fetched
+    /// with plain OkHttp against [com.kolktech.kahawai.data.network.ApiClient.authenticatedOkHttpClient]
+    /// rather than through Retrofit.
+    @GET("api/v1/items/{id}/subtitles")
+    suspend fun subtitles(
+        @Path("id") id: String,
+        @Query("ass_render") assRender: Boolean,
+        @Query("graphics_overlay") graphicsOverlay: Boolean,
+    ): SubtitlesResponse
+
+    @GET("api/v1/items/{id}/fonts")
+    suspend fun fonts(@Path("id") id: String): FontsResponse
 
     @POST("api/v1/playback/sessions")
     suspend fun startSession(@Body body: StartSessionRequest): StartSessionResponse
