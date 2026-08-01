@@ -3,11 +3,11 @@ package com.kolktech.kahawai.ui.home
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,12 +75,19 @@ private fun LibraryRowSection(
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
         )
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(horizontal = 16.dp),
+        Column(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(horizontal = 16.dp),
         ) {
-            items(row.items, key = { it.id }) { item ->
-                PosterCard(item, repo, onOpenItem)
+            row.items.chunked(2).forEach { pair ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    pair.forEach { item ->
+                        PosterCard(item, repo, onOpenItem, modifier = Modifier.weight(1f))
+                    }
+                    if (pair.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
             }
         }
     }

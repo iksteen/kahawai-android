@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -30,7 +29,7 @@ fun PosterCard(
 ) {
     Column(
         modifier = modifier
-            .width(120.dp)
+            .fillMaxWidth()
             .clickable { onClick(item.id) },
     ) {
         AsyncImage(
