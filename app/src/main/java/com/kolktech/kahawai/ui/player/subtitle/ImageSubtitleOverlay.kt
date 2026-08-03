@@ -222,12 +222,21 @@ fun ImageSubtitleOverlay(
         drawIntoCanvas { canvas ->
             val paint = Paint()
             set.objects.forEach { obj ->
-                val dst = RectF(
-                    rect.left + obj.x * scaleX,
-                    rect.top + obj.y * scaleY,
-                    rect.left + (obj.x + obj.bitmap.width) * scaleX,
-                    rect.top + (obj.y + obj.bitmap.height) * scaleY,
-                )
+                val w = obj.bitmap.width * scaleX
+                val h = obj.bitmap.height * scaleY
+                // Clamp into the displayed frame, mirroring the web
+                // client's draw() (and the burn path): composition space
+                // (cw x ch, e.g. 1920x1080) can be TALLER than the video
+                // frame it plays over (a 2.39:1 scope film), and the
+                // width-uniform scale maps bottom-anchored rows to y
+                // coordinates past the picture's bottom edge — off
+                // screen entirely in landscape, where the frame already
+                // fills the display's height. Burn-in clamps such rows
+                // back onto the picture; without this the overlay showed
+                // only the top line of two-line PGS subtitles.
+                val x = (obj.x * scaleX).coerceIn(0f, (rect.width - w).coerceAtLeast(0f))
+                val y = (obj.y * scaleY).coerceIn(0f, (rect.height - h).coerceAtLeast(0f))
+                val dst = RectF(rect.left + x, rect.top + y, rect.left + x + w, rect.top + y + h)
                 canvas.nativeCanvas.drawBitmap(obj.bitmap, null, dst, paint)
             }
         }

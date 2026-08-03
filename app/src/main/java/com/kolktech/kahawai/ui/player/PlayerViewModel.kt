@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -27,14 +28,16 @@ import androidx.media3.exoplayer.hls.playlist.DefaultHlsPlaylistTracker
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
-import androidx.media3.exoplayer.source.SingleSampleMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
+import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.text.DefaultSubtitleParserFactory
+import androidx.media3.extractor.text.SubtitleExtractor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -177,22 +180,54 @@ class PlayerViewModel(
     /// any content type: builds the content MediaSource via whichever
     /// delegate matches, THEN separately wraps each of MediaItem's own
     /// sideloaded subtitleConfigurations (Text-delivery VTT — see
-    /// textDeliverySubtitleConfigs()) in a SingleSampleMediaSource and
-    /// merges them all with MergingMediaSource. That merging step lives
-    /// in DefaultMediaSourceFactory itself, NOT in HlsMediaSource.Factory
+    /// textDeliverySubtitleConfigs()) and merges them all with
+    /// MergingMediaSource. That merging step lives in
+    /// DefaultMediaSourceFactory itself, NOT in HlsMediaSource.Factory
     /// — calling hlsFactory.createMediaSource(mediaItem) directly (as
     /// this did before) skips it entirely, silently dropping every
     /// Text-delivery subtitle track for remux/transcode sessions. Ass/
     /// Overlay delivery is unaffected either way (out-of-band HTTP taps,
     /// never routed through MediaItem at all), which is why this
     /// regression was easy to miss.
+    ///
+    /// The wrapping MUST be the modern ProgressiveMediaSource +
+    /// SubtitleExtractor arrangement (what DefaultMediaSourceFactory
+    /// itself builds — confirmed by disassembling its 1.10.0
+    /// createMediaSource), NOT the legacy SingleSampleMediaSource this
+    /// used before: SingleSampleMediaSource delivers the raw VTT bytes
+    /// as one text/vtt sample, and Media3 1.10's TextRenderer ships
+    /// with legacy sample decoding DISABLED — selecting such a track
+    /// doesn't quietly show nothing, it throws ("Legacy decoding is
+    /// disabled, can't handle text/vtt samples") and takes the whole
+    /// playback down with it. SubtitleExtractor instead parses the VTT
+    /// at load time into application/x-media3-cues samples, the only
+    /// thing the renderer accepts.
     private fun buildMediaSourceFactory(dataSourceFactory: DataSource.Factory): MediaSource.Factory {
         val hlsFactory = HlsMediaSource.Factory(dataSourceFactory)
             .setPlaylistTrackerFactory { dsFactory, errorPolicy, parserFactory, cmcdConfig, executor ->
                 DefaultHlsPlaylistTracker(dsFactory, errorPolicy, parserFactory, cmcdConfig, HLS_PLAYLIST_STUCK_COEFFICIENT, executor)
             }
-        val subtitleFactory = SingleSampleMediaSource.Factory(dataSourceFactory)
+        val subtitleParserFactory = DefaultSubtitleParserFactory()
         val progressiveFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        fun subtitleSource(config: MediaItem.SubtitleConfiguration): MediaSource {
+            val format = Format.Builder()
+                .setSampleMimeType(config.mimeType)
+                .setLanguage(config.language)
+                .setSelectionFlags(config.selectionFlags)
+                .setRoleFlags(config.roleFlags)
+                .setLabel(config.label)
+                .setId(config.id)
+                .build()
+            // Unlike DefaultMediaSourceFactory we can't defer the fetch
+            // until the track is selected (its lazy-single-track hook is
+            // package-private), so each sideloaded VTT is fetched at
+            // prepare() — they're small text files, an acceptable cost.
+            val extractorsFactory = ExtractorsFactory {
+                arrayOf(SubtitleExtractor(subtitleParserFactory.create(format), format))
+            }
+            return ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
+                .createMediaSource(MediaItem.fromUri(config.uri))
+        }
         return object : MediaSource.Factory {
             override fun createMediaSource(mediaItem: MediaItem): MediaSource {
                 if (mediaItem.localConfiguration?.mimeType != MimeTypes.APPLICATION_M3U8) {
@@ -201,7 +236,7 @@ class PlayerViewModel(
                 val content = hlsFactory.createMediaSource(mediaItem)
                 val subtitleConfigs = mediaItem.localConfiguration?.subtitleConfigurations.orEmpty()
                 if (subtitleConfigs.isEmpty()) return content
-                val subtitleSources = subtitleConfigs.map { subtitleFactory.createMediaSource(it, C.TIME_UNSET) }
+                val subtitleSources = subtitleConfigs.map { subtitleSource(it) }
                 return MergingMediaSource(content, *subtitleSources.toTypedArray())
             }
 
@@ -460,34 +495,33 @@ class PlayerViewModel(
         viewModelScope.launch {
             try {
                 val profile = CapabilityProfileBuilder.build(getApplication())
-                // Run alongside startSession, not after it — attach() below
-                // needs the resolved list to build the sideloaded VTT
-                // configs for the FIRST MediaItem. Best-effort: a failure
-                // here means no subtitle picker entries, not a broken
-                // playback session, so it's swallowed rather than failing
-                // the whole start().
-                val subtitlesDeferred = async {
-                    try {
-                        repo.subtitles(itemId)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to load subtitle tracks for item=$itemId", e)
-                        emptyList()
-                    }
+                // Resolved BEFORE startSession, not alongside it: the
+                // request below may only carry subtitle_track for a
+                // BURN-delivery pick (see the burnPickOrNull note), and
+                // delivery is only knowable from this list. Best-effort:
+                // a failure here means no subtitle picker entries, not a
+                // broken playback session, so it's swallowed rather than
+                // failing the whole start().
+                val tracks = try {
+                    repo.subtitles(itemId)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to load subtitle tracks for item=$itemId", e)
+                    emptyList()
                 }
-                val session = repo.startSession(
-                    itemId,
-                    profile,
-                    startMs,
-                    audioTrack = initialAudioTrack,
-                    subtitleTrack = initialSubtitleTrackId,
-                )
-                val tracks = subtitlesDeferred.await()
                 _subtitleTracks.value = tracks
                 // The Detail screen only carries the chosen track's id
                 // through nav args; resolve it against the list once
                 // it's loaded so the picker UI and text-delivery override
                 // both see a real SubtitleTrack, not just its id.
-                _selectedSubtitleTrack.value = tracks.firstOrNull { it.id == initialSubtitleTrackId }
+                val initialTrack = tracks.firstOrNull { it.id == initialSubtitleTrackId }
+                _selectedSubtitleTrack.value = initialTrack
+                val session = repo.startSession(
+                    itemId,
+                    profile,
+                    startMs,
+                    audioTrack = initialAudioTrack,
+                    subtitleTrack = burnPickOrNull(initialTrack),
+                )
                 this@PlayerViewModel.session = session
                 Log.d(
                     TAG,
@@ -569,7 +603,18 @@ class PlayerViewModel(
             previousSeek?.cancelAndJoin()
             try {
                 realPlayer.pause()
-                val result = repo.seek(session.sessionId, targetMs, subtitleTrack = _selectedSubtitleTrack.value?.id)
+                // No subtitle_track on seeks (mirrors the web client):
+                // the hub's session already remembers an active burn
+                // pick across seek-restarts, and its seek endpoint
+                // treats any IMAGE-format track id as a NEW burn order —
+                // sending the current selection here is what silently
+                // converted an "overlay"-delivery PGS pick into a
+                // burned-in encode on the first seek, leaving the video
+                // with baked-in subtitles UNDER this client's own
+                // overlay rendering of the same track (two copies,
+                // independently timed — the "PGS out of sync" report),
+                // with no way to switch off the burned copy afterwards.
+                val result = repo.seek(session.sessionId, targetMs)
                 // See start()'s comment: offsetMs is the ABSOLUTE
                 // position this fresh playlist starts at (targetMs
                 // itself), not result.partBaseMs — using partBaseMs here
@@ -604,6 +649,15 @@ class PlayerViewModel(
     /// seek() at all, so a burn pick/un-pick instead tears down and
     /// starts a brand new session at the current position — the same
     /// call start() makes, just resuming instead of from startMs.
+    /// The only subtitle pick the hub may ever hear about: session start
+    /// and seek both interpret an IMAGE-format track id as "burn this
+    /// into the video" (crates/kahawai-hub/src/api.rs StartSessionRequest,
+    /// sessions.rs seek()) — the hub cannot know this client renders
+    /// "overlay" delivery itself. Text/ass picks are hub-side no-ops, so
+    /// nothing but an explicit "burn"-delivery choice belongs on the wire.
+    private fun burnPickOrNull(track: SubtitleTrack?): Long? =
+        track?.takeIf { it.delivery == "burn" }?.id
+
     private fun restartSessionWithSubtitle(subtitleTrackId: Long?, revertTo: SubtitleTrack?) {
         viewModelScope.launch {
             try {
@@ -915,8 +969,28 @@ class PlayerViewModel(
         val params = realPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
         if (track != null && track.delivery == "text") {
-            val group = realPlayer.currentTracks.groups
-                .firstOrNull { it.type == C.TRACK_TYPE_TEXT && it.mediaTrackGroup.getFormat(0).id == track.id.toString() }
+            // MergingMediaPeriod re-exposes every child source's formats
+            // with the id rewritten to "<childIndex>:<originalId>"
+            // (uniqueness across children — confirmed in 1.10.0
+            // bytecode), so the sideloaded VTT config's id "1234"
+            // surfaces here as e.g. "1:1234" and an exact comparison
+            // never matched — the override was silently skipped and
+            // text tracks never turned on. The hub's HLS playlists carry
+            // no subtitle renditions of their own, so every TEXT group
+            // is one of ours and suffix matching is unambiguous.
+            val wantedId = track.id.toString()
+            val group = realPlayer.currentTracks.groups.firstOrNull {
+                it.type == C.TRACK_TYPE_TEXT &&
+                    it.mediaTrackGroup.getFormat(0).id?.substringAfterLast(':') == wantedId
+            }
+            // Log.i, not Log.d: the vivo test device suppresses D-level
+            // logcat output entirely, and this is the one line that says
+            // whether a text pick actually engaged.
+            Log.i(
+                TAG,
+                "text override: want=$wantedId matched=${group != null} " +
+                    "textGroups=${realPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.map { it.mediaTrackGroup.getFormat(0).id }}",
+            )
             if (group != null) params.addOverride(TrackSelectionOverride(group.mediaTrackGroup, 0))
         }
         realPlayer.trackSelectionParameters = params.build()
@@ -941,7 +1015,11 @@ class PlayerViewModel(
         val previous = _selectedSubtitleTrack.value
         _selectedSubtitleTrack.value = track
         if (previous?.delivery == "burn" || track?.delivery == "burn") {
-            restartSessionWithSubtitle(track?.id, revertTo = previous)
+            // burnPickOrNull, not track?.id: switching AWAY from a burn
+            // to an overlay/text track must start the new session with
+            // NO pick — passing an overlay track's id here would just
+            // order a fresh burn of the new track instead of un-burning.
+            restartSessionWithSubtitle(burnPickOrNull(track), revertTo = previous)
         } else {
             // Text delivery lives on tracks attached at the START of the
             // CURRENT MediaItem (realPlayer.currentTracks), so this doesn't
