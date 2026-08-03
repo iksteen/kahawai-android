@@ -6,9 +6,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.kolktech.kahawai.KahawaiApp
@@ -57,7 +59,15 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
         navController.navigate(Routes.LOGIN) { popUpTo(0) { inclusive = true } }
     }
 
-    NavHost(navController = navController, startDestination = start, modifier = modifier) {
+    // Every screen keeps out of the display cutout (and any visible bars)
+    // EXCEPT the player: video should use the whole panel, cutout
+    // included, so its route skips safeDrawingPadding entirely. The
+    // window-level opt-in that actually lets content extend under the
+    // cutout (layoutInDisplayCutoutMode) is the player's own to manage —
+    // see PlayerScreen's window DisposableEffect.
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+    val insetsModifier = if (currentRoute == Routes.PLAYER) modifier else modifier.safeDrawingPadding()
+    NavHost(navController = navController, startDestination = start, modifier = insetsModifier) {
         composable(Routes.SETUP) {
             ServerSetupScreen(
                 serverConfigStore = app.serverConfigStore,

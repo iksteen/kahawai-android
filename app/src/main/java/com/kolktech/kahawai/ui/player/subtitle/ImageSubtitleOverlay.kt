@@ -88,6 +88,24 @@ internal fun contentRectFor(containerW: Float, containerH: Float, videoW: Float,
     return ContentRect((containerW - w) / 2f, (containerH - h) / 2f, w, h)
 }
 
+/// Zoom(crop)'s content rect overflows the container vertically, so
+/// bottom-anchored subtitles — laid out against the video frame — land
+/// below the visible screen edge. Shifts them back up just enough to be
+/// fully visible. One shared delta for every shifted rect, not a per-rect
+/// clamp: a rendered line is several overlapping bitmaps (ASS fill/
+/// outline layers) or stacked rows (two-line PGS), and clamping each to
+/// the same bound would collapse them onto each other. Only rects in the
+/// bottom half of the screen move — top-anchored signs stay anchored to
+/// the video frame and crop with it, same as burn-in. No-op outside Zoom:
+/// Fit/Fill keep every rect inside the container, so delta is zero.
+internal fun shiftBottomOverflowIntoView(dsts: List<RectF>, containerH: Float) {
+    val half = containerH / 2f
+    var delta = 0f
+    for (d in dsts) if (d.centerY() > half) delta = maxOf(delta, d.bottom - containerH)
+    if (delta <= 0f) return
+    for (d in dsts) if (d.centerY() > half) d.offset(0f, -delta)
+}
+
 /// PGS/VobSub ("overlay" delivery): the session tap streams decoded
 /// display sets — {"s","cw","ch","o":[{"x","y","png"}]} — composited here
 /// on a Compose Canvas, mirroring web/src/views/Player.tsx:339-468. The
@@ -221,7 +239,7 @@ fun ImageSubtitleOverlay(
         val scaleY = if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL) rect.height / set.compHeight else scaleX
         drawIntoCanvas { canvas ->
             val paint = Paint()
-            set.objects.forEach { obj ->
+            val dsts = set.objects.map { obj ->
                 val w = obj.bitmap.width * scaleX
                 val h = obj.bitmap.height * scaleY
                 // Clamp into the displayed frame, mirroring the web
@@ -236,8 +254,11 @@ fun ImageSubtitleOverlay(
                 // only the top line of two-line PGS subtitles.
                 val x = (obj.x * scaleX).coerceIn(0f, (rect.width - w).coerceAtLeast(0f))
                 val y = (obj.y * scaleY).coerceIn(0f, (rect.height - h).coerceAtLeast(0f))
-                val dst = RectF(rect.left + x, rect.top + y, rect.left + x + w, rect.top + y + h)
-                canvas.nativeCanvas.drawBitmap(obj.bitmap, null, dst, paint)
+                RectF(rect.left + x, rect.top + y, rect.left + x + w, rect.top + y + h)
+            }
+            shiftBottomOverflowIntoView(dsts, size.height)
+            set.objects.forEachIndexed { index, obj ->
+                canvas.nativeCanvas.drawBitmap(obj.bitmap, null, dsts[index], paint)
             }
         }
     }

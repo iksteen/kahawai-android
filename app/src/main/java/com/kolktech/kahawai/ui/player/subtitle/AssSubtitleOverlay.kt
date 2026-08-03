@@ -288,8 +288,21 @@ fun AssSubtitleOverlay(
         val scaleY = rect.height / frameSize.height
         drawIntoCanvas { canvas ->
             val paint = Paint()
-            f.images?.forEach { tex ->
-                val bitmap = tex.bitmap ?: return@forEach
+            val positioned = f.images.orEmpty().mapNotNull { tex ->
+                val bitmap = tex.bitmap ?: return@mapNotNull null
+                Triple(
+                    tex,
+                    bitmap,
+                    RectF(
+                        rect.left + tex.x * scaleX,
+                        rect.top + tex.y * scaleY,
+                        rect.left + (tex.x + bitmap.width) * scaleX,
+                        rect.top + (tex.y + bitmap.height) * scaleY,
+                    ),
+                )
+            }
+            shiftBottomOverflowIntoView(positioned.map { it.third }, size.height)
+            positioned.forEach { (tex, bitmap, dst) ->
                 // ASS colors pack RGB in the upper 3 bytes and alpha
                 // INVERTED (0 = opaque) in the low byte; tex.bitmap is an
                 // alpha-only mask, tinted via Paint.color — same formula
@@ -299,12 +312,6 @@ fun AssSubtitleOverlay(
                 val b = (tex.color shr 8) and 0xFF
                 val a = 0xFF - (tex.color and 0xFF)
                 paint.color = (a shl 24) or (r shl 16) or (g shl 8) or b
-                val dst = RectF(
-                    rect.left + tex.x * scaleX,
-                    rect.top + tex.y * scaleY,
-                    rect.left + (tex.x + bitmap.width) * scaleX,
-                    rect.top + (tex.y + bitmap.height) * scaleY,
-                )
                 canvas.nativeCanvas.drawBitmap(bitmap, null, dst, paint)
             }
         }

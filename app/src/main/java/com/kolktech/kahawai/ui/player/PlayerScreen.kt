@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Context
 import android.content.ContextWrapper
 import android.media.AudioManager
+import android.os.Build
 import android.provider.Settings
 import android.view.GestureDetector
 import android.view.LayoutInflater
@@ -12,6 +13,7 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.PopupMenu
 import androidx.activity.compose.BackHandler
@@ -64,6 +66,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.DefaultTrackNameProvider
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.dto.displayLabel
@@ -124,8 +127,29 @@ fun PlayerScreen(
         val window = view.context.findActivity()?.window
         val controller = window?.let { WindowInsetsControllerCompat(it, view) }
         controller?.hide(WindowInsetsCompat.Type.navigationBars())
+        // Draw into the camera-cutout area too: with the bars hidden the
+        // system otherwise letterboxes the window at the cutout's edge
+        // (black band beside the notch in landscape). SHORT_EDGES covers
+        // camera cutouts in both orientations — they always sit on a
+        // short edge of the panel. Window-level and player-only, restored
+        // on the way out — the rest of the app keeps its
+        // safeDrawingPadding (see KahawaiNavGraph), which the player
+        // route skips.
+        val previousCutoutMode =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && window != null) {
+                val previous = window.attributes.layoutInDisplayCutoutMode
+                window.attributes = window.attributes.apply {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+                previous
+            } else {
+                null
+            }
         onDispose {
             controller?.show(WindowInsetsCompat.Type.navigationBars())
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && window != null && previousCutoutMode != null) {
+                window.attributes = window.attributes.apply { layoutInDisplayCutoutMode = previousCutoutMode }
+            }
         }
     }
 
@@ -633,6 +657,33 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                     findViewById<ImageButton>(androidx.media3.ui.R.id.exo_subtitle).setOnClickListener { anchor ->
                         showSubtitleTrackMenu(ctx, anchor)
                     }
+                    // SubtitleView ("text" delivery) lives inside
+                    // exo_content_frame, which Zoom(crop) scales past the
+                    // screen edges — cues keep their bottom padding
+                    // relative to the OVERFLOWING frame and land below the
+                    // visible screen. Re-derive the padding so cues sit
+                    // the default fraction above the *visible* bottom edge
+                    // instead; hooked on the frame's layout since both
+                    // resize-mode switches and video-size changes relayout
+                    // it. (The Ass/Image overlays handle the same problem
+                    // themselves via shiftBottomOverflowIntoView.)
+                    findViewById<View>(androidx.media3.ui.R.id.exo_content_frame)
+                        .addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+                            val frameH = (bottom - top).toFloat()
+                            val visibleH = height.toFloat()
+                            if (frameH <= 0f || visibleH <= 0f) return@addOnLayoutChangeListener
+                            val default = SubtitleView.DEFAULT_BOTTOM_PADDING_FRACTION
+                            val fraction = if (frameH > visibleH) {
+                                // The frame overflows equally top and
+                                // bottom (it's centered), so cue bottoms
+                                // must clear half the overflow plus the
+                                // default margin of the visible height.
+                                ((frameH - visibleH) / 2f + default * visibleH) / frameH
+                            } else {
+                                default
+                            }
+                            subtitleView?.setBottomPaddingFraction(fraction)
+                        }
                     playerView = this
                 }
             },
