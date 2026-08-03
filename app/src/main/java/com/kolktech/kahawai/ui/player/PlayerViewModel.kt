@@ -144,6 +144,13 @@ class PlayerViewModel(
     private val _nextEpisodeId = MutableStateFlow<String?>(null)
     val nextEpisodeId: StateFlow<String?> = _nextEpisodeId
 
+    /// Resolved alongside session start (see start()) purely for display
+    /// in the player's top bar — best-effort, same as the subtitle track
+    /// list, so a failed lookup just leaves the title blank rather than
+    /// failing playback.
+    private val _title = MutableStateFlow<String?>(null)
+    val title: StateFlow<String?> = _title
+
     /// children() has no dedicated "next up" endpoint to call — only
     /// needed on natural end-of-playback, so a plain instance here (like
     /// PlayerScreen's own subtitleRepo) beats threading one through the
@@ -517,6 +524,19 @@ class PlayerViewModel(
 
     private fun start() {
         _state.value = PlayerState.Loading
+        viewModelScope.launch {
+            try {
+                val detail = catalogRepo.item(itemId)
+                _title.value = if (detail.kind == "episode" && detail.season != null && detail.episode != null) {
+                    val seasonEpisode = "S%02dE%02d".format(detail.season, detail.episode)
+                    listOfNotNull(seasonEpisode, detail.title, detail.parentTitle).joinToString(" - ")
+                } else {
+                    detail.title
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to resolve title for item=$itemId", e)
+            }
+        }
         viewModelScope.launch {
             try {
                 val profile = CapabilityProfileBuilder.build(getApplication())

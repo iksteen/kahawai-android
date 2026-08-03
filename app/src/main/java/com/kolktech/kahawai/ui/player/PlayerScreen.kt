@@ -20,7 +20,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -50,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
@@ -276,6 +279,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     var resizeModeIndex by remember { mutableIntStateOf(0) }
     var controllerVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val title by viewModel.title.collectAsState()
     val selectedSubtitle by viewModel.selectedSubtitleTrack.collectAsState()
     val subtitleSession by viewModel.subtitleSession.collectAsState()
     val transientError by viewModel.transientError.collectAsState()
@@ -734,18 +738,32 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
         }
 
         if (controllerVisible) {
-            Surface(
-                onClick = onClose,
-                modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
-                shape = CircleShape,
-                color = Color.Black.copy(alpha = 0.5f),
+            Row(
+                modifier = Modifier.align(Alignment.TopStart).padding(16.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    modifier = Modifier.padding(10.dp),
-                    tint = Color.White,
-                )
+                Surface(
+                    onClick = onClose,
+                    shape = CircleShape,
+                    color = Color.Black.copy(alpha = 0.5f),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        modifier = Modifier.padding(10.dp),
+                        tint = Color.White,
+                    )
+                }
+                if (!title.isNullOrBlank()) {
+                    Text(
+                        text = title!!,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 12.dp).weight(1f, fill = false),
+                    )
+                }
             }
         }
 

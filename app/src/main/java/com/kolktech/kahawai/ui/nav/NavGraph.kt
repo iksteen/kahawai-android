@@ -162,14 +162,17 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
                 initialAudioTrack = audioTrack,
                 initialSubtitleTrackId = subtitleTrack.takeIf { it >= 0 },
                 onClose = { navController.popBackStack() },
-                // Replaces the current (just-finished) player entry rather
-                // than stacking a new one per auto-advance, so "back" from
-                // episode N+1 returns to wherever playback of the season
-                // was originally started from, not to the finished episode.
+                // Replaces the current (just-finished) player entry with
+                // the NEXT episode's own detail entry, then stacks its
+                // player on top of that — so "back" from episode N+1 lands
+                // on episode N+1's detail screen, not back on wherever
+                // playback of the season was originally started from (the
+                // finished episode's entry, which this pops away).
                 onNextEpisode = { nextItemId, nextSubtitleTrackId ->
-                    navController.navigate(Routes.player(nextItemId, 0L, 0, nextSubtitleTrackId)) {
+                    navController.navigate(Routes.detail(nextItemId)) {
                         popUpTo(Routes.PLAYER) { inclusive = true }
                     }
+                    navController.navigate(Routes.player(nextItemId, 0L, 0, nextSubtitleTrackId))
                 },
             )
         }
