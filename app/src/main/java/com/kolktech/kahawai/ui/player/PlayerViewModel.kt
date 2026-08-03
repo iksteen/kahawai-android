@@ -49,6 +49,7 @@ import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.readableMessage
+import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.data.repository.PlaybackRepository
 import com.kolktech.kahawai.playback.CapabilityProfileBuilder
 import okhttp3.Request
@@ -134,6 +135,20 @@ class PlayerViewModel(
     fun clearTransientError() {
         _transientError.value = null
     }
+
+    /// Resolved once playback naturally reaches the end (see
+    /// handlePlaybackEnded) — the id of the next episode in the same show,
+    /// if there is one. PlayerScreen navigates to it as soon as it's set;
+    /// staying null just leaves playback ended, same as before this
+    /// feature existed (last episode of a show, or a non-episode item).
+    private val _nextEpisodeId = MutableStateFlow<String?>(null)
+    val nextEpisodeId: StateFlow<String?> = _nextEpisodeId
+
+    /// children() has no dedicated "next up" endpoint to call — only
+    /// needed on natural end-of-playback, so a plain instance here (like
+    /// PlayerScreen's own subtitleRepo) beats threading one through the
+    /// constructor for a single use site.
+    private val catalogRepo = CatalogRepository()
 
     private val realPlayer: ExoPlayer by lazy {
         val dataSourceFactory = DefaultDataSource.Factory(
@@ -418,6 +433,7 @@ class PlayerViewModel(
     private var progressJob: Job? = null
     private var seekJob: Job? = null
     private var subtitleEpoch: Int = 0
+    private var playbackEndedHandled = false
 
     /// The offsetMs value baked into the current MediaItem's sideloaded
     /// VTT configs as `shift_ms` (see textDeliverySubtitleConfigs). When
@@ -483,6 +499,7 @@ class PlayerViewModel(
                         "currentPos=${realPlayer.currentPosition} bufferedPos=${realPlayer.bufferedPosition} " +
                         "playWhenReady=${realPlayer.playWhenReady}",
                 )
+                if (playbackState == Player.STATE_ENDED) handlePlaybackEnded()
             }
 
             /// Sideloaded subtitle track groups (attach()'s
@@ -583,6 +600,39 @@ class PlayerViewModel(
                 startProgressLoop()
             } catch (e: Exception) {
                 _state.value = PlayerState.Error(e.readableMessage())
+            }
+        }
+    }
+
+    /// STATE_ENDED can fire more than once (e.g. a stray onPlaybackStateChanged
+    /// replay), so [playbackEndedHandled] guards against issuing the
+    /// children() lookup twice. The current session/progress teardown is
+    /// left to onCleared() — it already runs the moment PlayerScreen
+    /// navigates away to the next episode's fresh (differently-keyed)
+    /// ViewModel, so nothing extra is needed here beyond stopping the
+    /// progress loop.
+    private fun handlePlaybackEnded() {
+        if (playbackEndedHandled) return
+        playbackEndedHandled = true
+        progressJob?.cancel()
+        viewModelScope.launch {
+            try {
+                val detail = catalogRepo.item(itemId)
+                val parentId = detail.parentId
+                if (detail.kind != "episode" || parentId == null) return@launch
+                // children() returns the whole show's episodes pre-sorted
+                // by season then episode (hub api.rs item_children) — the
+                // next entry after this item's own position IS the next
+                // episode to play, no season-boundary math needed.
+                val siblings = catalogRepo.children(parentId)
+                val index = siblings.indexOfFirst { it.id == itemId }
+                val next = if (index >= 0) siblings.getOrNull(index + 1) else null
+                if (next != null) {
+                    Log.d(TAG, "auto-advancing item=$itemId -> next=${next.id}")
+                    _nextEpisodeId.value = next.id
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to resolve next episode after item=$itemId ended", e)
             }
         }
     }

@@ -98,6 +98,7 @@ fun PlayerScreen(
     itemId: String,
     startMs: Long,
     onClose: () -> Unit,
+    onNextEpisode: (itemId: String, subtitleTrackId: Long?) -> Unit = { _, _ -> },
     initialAudioTrack: Int = 0,
     initialSubtitleTrackId: Long? = null,
 ) {
@@ -111,6 +112,14 @@ fun PlayerScreen(
         },
     )
     val state by viewModel.state.collectAsState()
+
+    // Fires once handlePlaybackEnded() resolves a next episode — carries
+    // the current subtitle selection forward so switching languages mid-
+    // season doesn't need to be redone every episode.
+    val nextEpisodeId by viewModel.nextEpisodeId.collectAsState()
+    LaunchedEffect(nextEpisodeId) {
+        nextEpisodeId?.let { id -> onNextEpisode(id, viewModel.selectedSubtitleTrack.value?.id) }
+    }
 
     // Pause immediately on the way out so the video isn't still actively
     // decoding/rendering while the screen pop plays out — otherwise it
