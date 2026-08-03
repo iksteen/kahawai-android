@@ -112,7 +112,16 @@ fun PlayerScreen(
     )
     val state by viewModel.state.collectAsState()
 
-    BackHandler(onBack = onClose)
+    // Pause immediately on the way out so the video isn't still actively
+    // decoding/rendering while the screen pop plays out — otherwise it
+    // visibly lingers on top of the previous screen for the duration of
+    // the exit transition (see NavGraph's popExitTransition for PLAYER).
+    val closeAndPause: () -> Unit = {
+        viewModel.player.pause()
+        onClose()
+    }
+
+    BackHandler(onBack = closeAndPause)
 
     // True fullscreen for the whole player screen. The status bar is
     // already hidden app-wide (MainActivity.hideStatusBar), so only the
@@ -180,11 +189,11 @@ fun PlayerScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(s.message, color = MaterialTheme.colorScheme.error)
-                Button(onClick = onClose, modifier = Modifier.padding(top = 12.dp)) {
+                Button(onClick = closeAndPause, modifier = Modifier.padding(top = 12.dp)) {
                     Text("Back")
                 }
             }
-            is PlayerState.Ready -> PlayerContent(viewModel, onClose)
+            is PlayerState.Ready -> PlayerContent(viewModel, closeAndPause)
         }
     }
 }

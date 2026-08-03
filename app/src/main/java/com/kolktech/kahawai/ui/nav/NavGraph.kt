@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.animation.ExitTransition
 import androidx.navigation.NavHostController
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.navigation.NavType
@@ -145,6 +146,11 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
                 navArgument("audioTrack") { type = NavType.IntType; defaultValue = 0 },
                 navArgument("subtitleTrack") { type = NavType.LongType; defaultValue = -1L },
             ),
+            // Skip the library's default 700ms cross-fade on the way out:
+            // the player keeps rendering live video for that whole
+            // duration, so it visibly lingers on top of the screen
+            // beneath it. An instant cut removes the overlap entirely.
+            popExitTransition = { ExitTransition.None },
         ) { backStackEntry ->
             val itemId = backStackEntry.arguments?.getString("itemId") ?: return@composable
             val startMs = backStackEntry.arguments?.getLong("startMs") ?: 0L
