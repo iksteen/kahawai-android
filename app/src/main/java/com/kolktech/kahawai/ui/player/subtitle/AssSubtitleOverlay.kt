@@ -133,7 +133,6 @@ fun AssSubtitleOverlay(
                     val assTrack = ass.createTrack()
                     assRender.setTrack(assTrack)
 
-                    val url = "${subtitleSession.streamBaseUrl}subs-${track.id}.ass"
                     withContext(Dispatchers.IO) {
                         val client = ApiClient.authenticatedOkHttpClient().newBuilder()
                             // Long-lived, growing stream (header, then
@@ -141,77 +140,103 @@ fun AssSubtitleOverlay(
                             // them) — must not time out while idle.
                             .readTimeout(0, TimeUnit.SECONDS)
                             .build()
-                        // A seek-restart tears the hub's pipeline down
-                        // before recreating the tap files, and this
-                        // connect (fired off the epoch bump) can race
-                        // that window — a one-shot miss here used to
-                        // mean subtitles silently never came back until
-                        // the next seek or track switch. Retry the
-                        // CONNECTION a few times (same 3x/700ms shape as
-                        // syncOrigin), but only while libass hasn't been
-                        // fed anything yet: a reconnect re-serves the
-                        // stream from its start, so retrying past that
-                        // point would feed duplicate events.
-                        var attempt = 0
-                        var fedAnything = false
-                        while (isActive) {
-                            val call = client.newCall(Request.Builder().url(url).build())
-                            // execute()/readUtf8Line() are blocking calls
-                            // that don't check coroutine cancellation
-                            // between reads — only Call.cancel() actually
-                            // interrupts a stalled read, by closing the
-                            // socket. Without this hook, a cancelled
-                            // coroutine leaves this readTimeout(0) connection
-                            // open until the hub happens to send another
-                            // line or closes it itself.
-                            val cancelHandle = coroutineContext.job.invokeOnCompletion { call.cancel() }
-                            try {
-                                call.execute().use { response ->
-                                    if (!response.isSuccessful) {
-                                        Log.w(TAG, ".ass tap http ${response.code} for track=${track.id} attempt=$attempt")
-                                        return@use
+
+                        // Connects to [url] and feeds assTrack; returns
+                        // whether a full header ([Script Info].../
+                        // Events "Format:" line) was ever seen. Retried
+                        // up to [maxAttempts] times, 700ms apart, but
+                        // only while nothing has been fed yet: a
+                        // reconnect re-serves the stream from its start,
+                        // so retrying past that point would feed
+                        // duplicate events.
+                        suspend fun feedFrom(url: String, maxAttempts: Int): Boolean {
+                            var attempt = 0
+                            var fedAnything = false
+                            while (isActive) {
+                                val call = client.newCall(Request.Builder().url(url).build())
+                                // execute()/readUtf8Line() are blocking calls
+                                // that don't check coroutine cancellation
+                                // between reads — only Call.cancel() actually
+                                // interrupts a stalled read, by closing the
+                                // socket. Without this hook, a cancelled
+                                // coroutine leaves this readTimeout(0) connection
+                                // open until the hub happens to send another
+                                // line or closes it itself.
+                                val cancelHandle = coroutineContext.job.invokeOnCompletion { call.cancel() }
+                                try {
+                                    call.execute().use { response ->
+                                        if (!response.isSuccessful) {
+                                            Log.w(TAG, ".ass tap http ${response.code} url=$url track=${track.id} attempt=$attempt")
+                                            return@use
+                                        }
+                                        val source = response.body?.source() ?: return@use
+                                        val header = StringBuilder()
+                                        var sawEvents = false
+                                        var headerDone = false
+                                        // Accumulate from the very start
+                                        // ([Script Info], [V4+ Styles], ...)
+                                        // through the Events "Format:" line —
+                                        // libass needs all of it, same span
+                                        // JASSUB's subContent covers on the web.
+                                        while (isActive && !headerDone) {
+                                            val line = source.readUtf8Line() ?: break
+                                            header.append(line).append('\n')
+                                            if (!sawEvents && line.trim().equals("[Events]", ignoreCase = true)) sawEvents = true
+                                            if (sawEvents && line.trim().startsWith("Format:", ignoreCase = true)) headerDone = true
+                                        }
+                                        if (!headerDone) return@use
+                                        fedAnything = true
+                                        assTrack.readBuffer(header.toString().toByteArray())
+                                        // Each subsequent Dialogue line is
+                                        // re-fed with the section marker so
+                                        // libass's line-oriented parser stays in
+                                        // [Events] context — mirrors JASSUB's
+                                        // `processData('[Events]\n' + lines)`,
+                                        // just per-line instead of batched
+                                        // (dialogue lines never embed a newline,
+                                        // so this is equally correct).
+                                        while (isActive) {
+                                            val line = source.readUtf8Line() ?: break
+                                            if (line.isBlank()) continue
+                                            assTrack.readBuffer("[Events]\n$line\n".toByteArray())
+                                        }
                                     }
-                                    val source = response.body?.source() ?: return@use
-                                    val header = StringBuilder()
-                                    var sawEvents = false
-                                    var headerDone = false
-                                    // Accumulate from the very start
-                                    // ([Script Info], [V4+ Styles], ...)
-                                    // through the Events "Format:" line —
-                                    // libass needs all of it, same span
-                                    // JASSUB's subContent covers on the web.
-                                    while (isActive && !headerDone) {
-                                        val line = source.readUtf8Line() ?: break
-                                        header.append(line).append('\n')
-                                        if (!sawEvents && line.trim().equals("[Events]", ignoreCase = true)) sawEvents = true
-                                        if (sawEvents && line.trim().startsWith("Format:", ignoreCase = true)) headerDone = true
-                                    }
-                                    if (!headerDone) return@use
-                                    fedAnything = true
-                                    assTrack.readBuffer(header.toString().toByteArray())
-                                    // Each subsequent Dialogue line is
-                                    // re-fed with the section marker so
-                                    // libass's line-oriented parser stays in
-                                    // [Events] context — mirrors JASSUB's
-                                    // `processData('[Events]\n' + lines)`,
-                                    // just per-line instead of batched
-                                    // (dialogue lines never embed a newline,
-                                    // so this is equally correct).
-                                    while (isActive) {
-                                        val line = source.readUtf8Line() ?: break
-                                        if (line.isBlank()) continue
-                                        assTrack.readBuffer("[Events]\n$line\n".toByteArray())
-                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    Log.w(TAG, ".ass tap failed url=$url track=${track.id} attempt=$attempt", e)
+                                } finally {
+                                    cancelHandle.dispose()
                                 }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                Log.w(TAG, ".ass tap failed for track=${track.id} attempt=$attempt", e)
-                            } finally {
-                                cancelHandle.dispose()
+                                if (fedAnything || ++attempt >= maxAttempts) break
+                                delay(700)
                             }
-                            if (fedAnything || ++attempt >= 3) break
-                            delay(700)
+                            return fedAnything
+                        }
+
+                        // The live session tap only exists for
+                        // Remux/Transcode sessions with an embedded
+                        // track: the hub's session_file handler no-ops
+                        // it for Mode::Direct (raw byte-range file, no
+                        // server-side pipeline to tap from) and can only
+                        // translate the public track id to an internal
+                        // pipeline key for origin=="embedded" tracks.
+                        // Mirrors web/src/views/Player.tsx's `isHls &&
+                        // selected.origin === 'embedded'` gate — falling
+                        // straight through to the item-scoped endpoint
+                        // otherwise, same as the web client's fallback.
+                        val fedFromSession = subtitleSession.isHls &&
+                            track.origin == "embedded" &&
+                            feedFrom(url = "${subtitleSession.streamBaseUrl}subs-${track.id}.ass", maxAttempts = 3)
+                        if (!fedFromSession) {
+                            // Whole-file extraction, streamed as it's
+                            // produced — no live pipeline to race, so a
+                            // single attempt is enough (same as the web
+                            // client's fallback `feed()` call).
+                            feedFrom(
+                                url = "${ApiClient.baseUrl().trimEnd('/')}/api/v1/items/$itemId/subtitles/${track.id}.ass",
+                                maxAttempts = 1,
+                            )
                         }
                     }
                 }

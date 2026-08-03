@@ -76,8 +76,16 @@ sealed interface PlayerState {
 /// reporting absolute time for the seekbar fix, that added the offset
 /// TWICE, desyncing ass/overlay subtitles after every seek or mid-video
 /// resume.)
+/// [isHls] mirrors web/src/views/Player.tsx's `isHls`: the live
+/// `subs-{id}.ass` tap only exists for Remux/Transcode sessions — the
+/// hub's session_file handler no-ops it for Mode::Direct (the raw file
+/// is served byte-for-byte with no server-side pipeline to tap), so a
+/// direct-mode session must fall back straight to the item-scoped
+/// `/items/{id}/subtitles/{id}.ass` whole-file-extraction endpoint
+/// instead (see AssSubtitleOverlay).
 data class SubtitleSession(
     val streamBaseUrl: String,
+    val isHls: Boolean,
     val epoch: Int,
 )
 
@@ -802,6 +810,7 @@ class PlayerViewModel(
         val streamBaseUrl = uri.substringBeforeLast('/') + "/"
         _subtitleSession.value = SubtitleSession(
             streamBaseUrl = streamBaseUrl,
+            isHls = session.mode != "direct",
             epoch = subtitleEpoch,
         )
         // offsetMs (partBaseMs) is only correct for multi-part timeline
