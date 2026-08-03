@@ -95,10 +95,38 @@ data class Source(
     val streams: MediaStreams? = null,
 )
 
+/// One source file's location, as named inside a `negotiated` verdict.
+/// Mirrors the `source` object in `item_query`'s response
+/// (crates/kahawai-hub/src/api.rs:2540-2544).
+@Serializable
+data class NegotiatedSource(
+    val moduleId: String,
+    val collectionId: String,
+    val pathRel: String,
+)
+
+/// The converged half of `QUERY /api/v1/items/{id}` — what this client
+/// would actually be served, over the source negotiation actually
+/// chose. Mirrors the `negotiated` object built in api.rs:2539-2556.
+/// Only present on a `QUERY` response; a plain `GET` never fills it.
+@Serializable
+data class Negotiated(
+    val source: NegotiatedSource? = null,
+    val mode: String,
+    val cost: String,
+    val streams: StreamsVerdict? = null,
+    /// The unified track list for the negotiated source, each with the
+    /// delivery this client would get (tracks.rs `Delivery`) — replaces
+    /// the removed `GET /items/{id}/subtitles` call entirely.
+    val subtitles: List<SubtitleTrack> = emptyList(),
+)
+
 /// The detail endpoint (crates/kahawai-hub/src/api.rs:2171-2311)
 /// overwrites the list endpoint's numeric `sources` count with the full
 /// array of source objects (api.rs:2239) — deliberately not the same
-/// shape as [Item.sources].
+/// shape as [Item.sources]. `sources[].streams` and `negotiated` are
+/// only populated by `QUERY`; a plain `GET` reports what was
+/// discovered, not what would be served (commit 5147059).
 @Serializable
 data class ItemDetail(
     val id: String,
@@ -119,4 +147,10 @@ data class ItemDetail(
     val played: Boolean = false,
     val playCount: Int = 0,
     val metadata: ItemMetadata? = null,
+    val negotiated: Negotiated? = null,
+    /// Set instead of `negotiated` when there is nothing to negotiate:
+    /// a show/album with no source of its own, or every mediahost for
+    /// this item unreachable right now. Not an error — the item still
+    /// renders.
+    val unavailable: String? = null,
 )

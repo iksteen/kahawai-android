@@ -10,9 +10,9 @@ data class VideoCap(
     val maxLevel: String? = null,
 )
 
-/// Mirrors `CapabilityProfile` in crates/kahawai-core/src/media.rs:99-125
-/// — sent verbatim on every session start; the hub negotiates
-/// direct/remux/transcode per stream from it (HUB-14).
+/// Mirrors `CapabilityProfile` in crates/kahawai-core/src/media.rs:99-137
+/// — sent verbatim on every session start (HUB-14) and on every item
+/// QUERY. The hub negotiates direct/remux/transcode per stream from it.
 @Serializable
 data class CapabilityProfile(
     val containers: List<String>,
@@ -25,6 +25,14 @@ data class CapabilityProfile(
     val maxBandwidthKbps: Int? = null,
     val assRender: Boolean,
     val graphicsOverlay: Boolean,
+    // HUB-32e (commit e1b7432): the one text rendering path — a
+    // converted SRT, a flattened ASS and an OCR-derived track all
+    // deliver as WebVTT, which Media3's built-in TextRenderer always
+    // reads, so this stays true. Defaults true on the hub side too:
+    // unlike its neighbours, a client saying nothing is assumed to
+    // read text, since that's what the conservative fallback has
+    // always delivered.
+    val vttRender: Boolean = true,
 )
 
 @Serializable
@@ -36,6 +44,18 @@ data class StartSessionRequest(
     val audioTrack: Int = 0,
     val videoTrack: Int = 0,
     val subtitleTrack: Long? = null,
+)
+
+/// `QUERY /api/v1/items/{id}` (RFC 10008) request body — same inputs a
+/// session start takes, minus everything that only matters once
+/// actually playing. Mirrors `ItemQuery` in api.rs:2408-2425.
+@Serializable
+data class ItemQueryRequest(
+    val profile: CapabilityProfile? = null,
+    val audioTrack: Int = 0,
+    val videoTrack: Int = 0,
+    val subtitleTrack: Long? = null,
+    val mode: String? = null,
 )
 
 @Serializable

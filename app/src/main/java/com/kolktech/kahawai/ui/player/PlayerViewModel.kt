@@ -511,7 +511,7 @@ class PlayerViewModel(
                 // broken playback session, so it's swallowed rather than
                 // failing the whole start().
                 val tracks = try {
-                    repo.subtitles(itemId)
+                    repo.subtitles(itemId, profile)
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to load subtitle tracks for item=$itemId", e)
                     emptyList()

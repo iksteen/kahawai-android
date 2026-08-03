@@ -1,8 +1,10 @@
 package com.kolktech.kahawai.data.repository
 
 import com.kolktech.kahawai.data.network.ApiClient
+import com.kolktech.kahawai.data.network.dto.CapabilityProfile
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.network.dto.ItemDetail
+import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
 import com.kolktech.kahawai.data.network.dto.ItemsResponse
 import com.kolktech.kahawai.data.network.dto.LibrarySummary
 
@@ -18,6 +20,26 @@ class CatalogRepository {
     ): ItemsResponse = ApiClient.apiService().items(library, q, sort, limit, offset)
 
     suspend fun item(id: String): ItemDetail = ApiClient.apiService().item(id)
+
+    /// The item viewer's call: what this client would actually be
+    /// served, negotiated against [profile]. Carries the subtitle track
+    /// list (with delivery) that used to be a separate `/subtitles`
+    /// fetch — see [com.kolktech.kahawai.data.network.ApiService.itemQuery].
+    suspend fun queryItem(
+        id: String,
+        profile: CapabilityProfile,
+        audioTrack: Int = 0,
+        videoTrack: Int = 0,
+        subtitleTrack: Long? = null,
+    ): ItemDetail = ApiClient.apiService().itemQuery(
+        id,
+        ItemQueryRequest(
+            profile = profile,
+            audioTrack = audioTrack,
+            videoTrack = videoTrack,
+            subtitleTrack = subtitleTrack,
+        ),
+    )
 
     suspend fun children(id: String): List<Item> = ApiClient.apiService().children(id).children
 

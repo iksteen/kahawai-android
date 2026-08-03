@@ -1,5 +1,6 @@
 package com.kolktech.kahawai.ui.detail
 
+import android.app.Application
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -52,7 +54,6 @@ import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.dto.VideoStreamInfo
 import com.kolktech.kahawai.data.network.dto.displayLabel
 import com.kolktech.kahawai.data.repository.CatalogRepository
-import com.kolktech.kahawai.data.repository.PlaybackRepository
 import com.kolktech.kahawai.ui.components.ErrorView
 
 @Composable
@@ -64,10 +65,10 @@ fun DetailScreen(
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
 ) {
-    val playbackRepo = remember { PlaybackRepository() }
+    val application = LocalContext.current.applicationContext as Application
     val viewModel: DetailViewModel = viewModel(
         key = itemId,
-        factory = viewModelFactory { initializer { DetailViewModel(repo, playbackRepo, itemId) } },
+        factory = viewModelFactory { initializer { DetailViewModel(application, repo, itemId) } },
     )
     val state by viewModel.state.collectAsState()
 

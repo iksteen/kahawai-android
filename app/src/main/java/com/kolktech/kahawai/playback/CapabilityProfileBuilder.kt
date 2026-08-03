@@ -63,6 +63,10 @@ object CapabilityProfileBuilder {
             // everything through flattened VTT or a burned-in encode.
             assRender = true,
             graphicsOverlay = true,
+            // Media3's TextRenderer reads WebVTT natively — the only
+            // format every text rung (converted SRT, flattened ASS,
+            // OCR) is delivered as.
+            vttRender = true,
         )
     }
 

@@ -3,6 +3,7 @@ package com.kolktech.kahawai.data.network
 import com.kolktech.kahawai.data.network.dto.BootstrapResponse
 import com.kolktech.kahawai.data.network.dto.ChildrenResponse
 import com.kolktech.kahawai.data.network.dto.ItemDetail
+import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
 import com.kolktech.kahawai.data.network.dto.ItemsResponse
 import com.kolktech.kahawai.data.network.dto.LibrariesResponse
 import com.kolktech.kahawai.data.network.dto.LoginRequest
@@ -13,11 +14,11 @@ import com.kolktech.kahawai.data.network.dto.SeekRequest
 import com.kolktech.kahawai.data.network.dto.SeekResponse
 import com.kolktech.kahawai.data.network.dto.StartSessionRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
-import com.kolktech.kahawai.data.network.dto.SubtitlesResponse
 import com.kolktech.kahawai.data.network.dto.TokenPair
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -47,23 +48,22 @@ interface ApiService {
         @Query("offset") offset: Int? = null,
     ): ItemsResponse
 
+    /// "What did we find" — sources without stream info, no negotiation.
     @GET("api/v1/items/{id}")
     suspend fun item(@Path("id") id: String): ItemDetail
 
+    /// "What would I be served" (RFC 10008 QUERY, api.rs `item_query`) —
+    /// same response shape as [item] plus `negotiated`: the source
+    /// negotiation chose, its per-stream verdicts, and the unified
+    /// subtitle track list with delivery computed for the declared
+    /// [com.kolktech.kahawai.data.network.dto.CapabilityProfile]. This
+    /// replaced the deleted `GET /items/{id}/subtitles` listing route —
+    /// one request answers both halves of the item page.
+    @HTTP(method = "QUERY", path = "api/v1/items/{id}", hasBody = true)
+    suspend fun itemQuery(@Path("id") id: String, @Body body: ItemQueryRequest): ItemDetail
+
     @GET("api/v1/items/{id}/children")
     suspend fun children(@Path("id") id: String): ChildrenResponse
-
-    /// Track list + computed delivery for THIS client (tracks.rs
-    /// delivery()); `.vtt`/`.ass` bodies and the session-scoped
-    /// `subs-{id}.{ass,jsonl}` taps are raw text/binary/streaming, fetched
-    /// with plain OkHttp against [com.kolktech.kahawai.data.network.ApiClient.authenticatedOkHttpClient]
-    /// rather than through Retrofit.
-    @GET("api/v1/items/{id}/subtitles")
-    suspend fun subtitles(
-        @Path("id") id: String,
-        @Query("ass_render") assRender: Boolean,
-        @Query("graphics_overlay") graphicsOverlay: Boolean,
-    ): SubtitlesResponse
 
     @GET("api/v1/items/{id}/fonts")
     suspend fun fonts(@Path("id") id: String): FontsResponse

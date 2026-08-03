@@ -3,13 +3,13 @@ package com.kolktech.kahawai.data.repository
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.CapabilityProfile
 import com.kolktech.kahawai.data.network.dto.FontsResponse
+import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
 import com.kolktech.kahawai.data.network.dto.ProgressRequest
 import com.kolktech.kahawai.data.network.dto.SeekRequest
 import com.kolktech.kahawai.data.network.dto.SeekResponse
 import com.kolktech.kahawai.data.network.dto.StartSessionRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
-import com.kolktech.kahawai.data.network.dto.SubtitlesResponse
 
 class PlaybackRepository {
     suspend fun startSession(
@@ -34,12 +34,14 @@ class PlaybackRepository {
         ApiClient.apiService().seek(sessionId, SeekRequest(positionMs = positionMs, subtitleTrack = subtitleTrack))
 
     /// Track list + computed delivery for this client's declared
-    /// capabilities (tracks.rs `Delivery`). Always requests the richest
-    /// reading (both bits true) — CapabilityProfileBuilder claims the
-    /// same on the session profile, so what's listed here is what the
-    /// player can actually render.
-    suspend fun subtitles(itemId: String): List<SubtitleTrack> =
-        ApiClient.apiService().subtitles(itemId, assRender = true, graphicsOverlay = true).subtitles
+    /// [profile] (tracks.rs `Delivery`), read off the same QUERY that
+    /// negotiates the source `startSession` will start — the
+    /// once-separate `GET /items/{id}/subtitles` route was deleted
+    /// because it could resolve a different source than the session did
+    /// (kahawai commit 5147059).
+    suspend fun subtitles(itemId: String, profile: CapabilityProfile): List<SubtitleTrack> =
+        ApiClient.apiService().itemQuery(itemId, ItemQueryRequest(profile = profile)).negotiated?.subtitles
+            ?: emptyList()
 
     suspend fun fonts(itemId: String): FontsResponse = ApiClient.apiService().fonts(itemId)
 
