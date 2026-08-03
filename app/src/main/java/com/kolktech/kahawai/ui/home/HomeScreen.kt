@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
@@ -24,8 +24,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -81,6 +83,15 @@ fun HomeScreen(
                             Text("No libraries yet. Connect a mediahost to the hub.")
                         }
                     } else {
+                        // The very first poster on screen needs a D-pad
+                        // focus target the instant the grid appears —
+                        // otherwise there's nothing highlighted for a TV
+                        // remote to act on until the user presses a key.
+                        // PosterCard requests its own focus once composed
+                        // (see its focusRequester handling) rather than
+                        // this scope guessing when that's safe to do.
+                        val firstItemFocusRequester = remember { FocusRequester() }
+
                         // Column count is derived once from the measured
                         // width (so landscape/tablet fills the row instead
                         // of showing two oversized posters), then reused
@@ -99,15 +110,25 @@ fun HomeScreen(
                             // library at once — that all-at-once burst was
                             // the cause of the scroll stutter.
                             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                s.rows.forEach { row ->
+                                s.rows.forEachIndexed { rowIndex, row ->
                                     item(key = "${row.library.id}-header") {
                                         LibraryHeader(row, onOpenLibrary)
                                     }
-                                    items(
+                                    itemsIndexed(
                                         row.items.chunked(columns),
-                                        key = { chunk -> "${row.library.id}-${chunk.first().id}" },
-                                    ) { chunk ->
-                                        PosterGridRow(chunk, columns, repo, onOpenItem)
+                                        key = { _, chunk -> "${row.library.id}-${chunk.first().id}" },
+                                    ) { chunkIndex, chunk ->
+                                        PosterGridRow(
+                                            chunk,
+                                            columns,
+                                            repo,
+                                            onOpenItem,
+                                            firstItemFocusRequester = if (rowIndex == 0 && chunkIndex == 0) {
+                                                firstItemFocusRequester
+                                            } else {
+                                                null
+                                            },
+                                        )
                                     }
                                 }
                             }
@@ -147,13 +168,20 @@ private fun PosterGridRow(
     columns: Int,
     repo: CatalogRepository,
     onOpenItem: (String) -> Unit,
+    firstItemFocusRequester: FocusRequester? = null,
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(GRID_SPACING),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
     ) {
-        chunk.forEach { item ->
-            PosterCard(item, repo, onOpenItem, modifier = Modifier.weight(1f))
+        chunk.forEachIndexed { index, item ->
+            PosterCard(
+                item,
+                repo,
+                onOpenItem,
+                modifier = Modifier.weight(1f),
+                focusRequester = if (index == 0) firstItemFocusRequester else null,
+            )
         }
         repeat(columns - chunk.size) {
             Spacer(modifier = Modifier.weight(1f))

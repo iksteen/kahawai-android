@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -84,6 +85,11 @@ fun LibraryScreen(
                 LaunchedEffect(shouldLoadMore, s.items.size) {
                     if (shouldLoadMore) viewModel.loadMore()
                 }
+                // PosterCard requests its own focus once composed (it's
+                // the only point that's guaranteed the item actually
+                // exists in the lazy grid yet), so this only needs to
+                // hand the first item a requester — not call it itself.
+                val firstItemFocusRequester = remember { FocusRequester() }
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 110.dp),
                     state = gridState,
@@ -92,8 +98,13 @@ fun LibraryScreen(
                     contentPadding = PaddingValues(16.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(s.items, key = { it.id }) { item ->
-                        PosterCard(item, repo, onOpenItem)
+                    itemsIndexed(s.items, key = { _, item -> item.id }) { index, item ->
+                        PosterCard(
+                            item,
+                            repo,
+                            onOpenItem,
+                            focusRequester = if (index == 0) firstItemFocusRequester else null,
+                        )
                     }
                     if (s.loadingMore) {
                         item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
