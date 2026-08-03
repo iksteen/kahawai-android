@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,6 +23,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -28,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -36,6 +40,7 @@ import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
 import com.kolktech.kahawai.ui.components.PosterCard
+import com.kolktech.kahawai.ui.theme.KahawaiOnSurfaceVariant
 
 private val POSTER_MIN_WIDTH = 100.dp
 private val GRID_SPACING = 10.dp
@@ -55,14 +60,29 @@ fun HomeScreen(
     val state by viewModel.state.collectAsState()
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Kahawai") },
+                title = {
+                    Text(
+                        "kahawai",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                },
                 actions = {
                     IconButton(onClick = onSearch) {
-                        Icon(Icons.Default.Search, contentDescription = "Search")
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = KahawaiOnSurfaceVariant,
+                        )
                     }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                ),
             )
         },
     ) { padding ->
@@ -147,16 +167,28 @@ private fun LibraryHeader(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(top = 16.dp, start = 16.dp, end = 4.dp, bottom = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 20.dp, start = 16.dp, end = 4.dp, bottom = 8.dp),
     ) {
         Text(
             row.library.name,
             style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.weight(1f),
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
         )
+        Icon(
+            Icons.AutoMirrored.Filled.ArrowForward,
+            contentDescription = null,
+            tint = KahawaiOnSurfaceVariant,
+            modifier = Modifier.padding(start = 6.dp).size(16.dp),
+        )
+        Spacer(modifier = Modifier.weight(1f))
         if (row.total > row.items.size) {
             TextButton(onClick = { onOpenLibrary(row.library.id, row.library.name) }) {
-                Text("See all (${row.total})")
+                Text(
+                    "see all (${row.total})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KahawaiOnSurfaceVariant,
+                )
             }
         }
     }
