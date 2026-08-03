@@ -13,13 +13,22 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.Tracks
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
+import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.hls.playlist.DefaultHlsPlaylistTracker
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,12 +39,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.readableMessage
 import com.kolktech.kahawai.data.repository.PlaybackRepository
 import com.kolktech.kahawai.playback.CapabilityProfileBuilder
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 
 sealed interface PlayerState {
     data object Loading : PlayerState
@@ -50,7 +62,11 @@ sealed interface PlayerState {
 /// itself doesn't change across a seek-restart within one session (only
 /// [offsetMs] does — see PlayerViewModel.attach), so [epoch] is bumped on
 /// every attach() to give overlay composables an explicit key to
-/// reconnect their stream on.
+/// reconnect their stream on. [offsetMs] can ALSO change without an
+/// [epoch] bump: [PlayerViewModel.syncOrigin] corrects it in place once
+/// the hub reports the pipeline's true (keyframe-snapped) origin, and
+/// overlay composables are expected to read that correction live rather
+/// than wait for a reconnect.
 data class SubtitleSession(
     val streamBaseUrl: String,
     val offsetMs: Long,
@@ -63,23 +79,53 @@ private const val PROGRESS_INTERVAL_MS = 10_000L
 
 private const val TAG = "PlayerViewModel"
 
+/// See PlayerViewModel.buildMediaSourceFactory. Media3's own default is
+/// 3.5 (DefaultHlsPlaylistTracker.DEFAULT_PLAYLIST_STUCK_TARGET_DURATION_COEFFICIENT).
+///
+/// A raised-but-still-finite coefficient (30.0, ~60s) was tried first and
+/// still failed on a seek far ahead — but the SAME hub, same seek, same
+/// content played correctly in the web client, which proves the hub's
+/// pipeline isn't the problem. web/src/views/Player.tsx's hls.js config
+/// doesn't give its analogous check a longer timeout either — it disables
+/// it outright: `liveMaxLatencyDurationCount: Infinity`. This mirrors
+/// that exactly rather than guessing at a bigger-but-still-wrong finite
+/// number a second time. (now - lastSnapshotChangeMs) > targetDurationMs
+/// * COEFFICIENT: multiplying by Double.MAX_VALUE overflows the right
+/// side to +Infinity under IEEE 754 (no crash, no NaN), and elapsed real
+/// time is never greater than infinity, so the check can never fire.
+private const val HLS_PLAYLIST_STUCK_COEFFICIENT = Double.MAX_VALUE
+
 @OptIn(UnstableApi::class)
 class PlayerViewModel(
     application: Application,
     private val repo: PlaybackRepository,
     val itemId: String,
     private val startMs: Long,
+    private val initialAudioTrack: Int = 0,
+    private val initialSubtitleTrackId: Long? = null,
 ) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<PlayerState>(PlayerState.Loading)
     val state: StateFlow<PlayerState> = _state
 
+    /// Failures that DON'T end the session — a failed seek or subtitle
+    /// switch leaves the current stream playable, so they surface as a
+    /// snackbar over the still-running player rather than tearing the
+    /// whole UI down to [PlayerState.Error] (which is reserved for
+    /// "nothing is playing and nothing will": start() and onPlayerError).
+    private val _transientError = MutableStateFlow<String?>(null)
+    val transientError: StateFlow<String?> = _transientError
+
+    fun clearTransientError() {
+        _transientError.value = null
+    }
+
     private val realPlayer: ExoPlayer by lazy {
         val dataSourceFactory = DefaultDataSource.Factory(
             getApplication(),
-            OkHttpDataSource.Factory(ApiClient.authenticatedOkHttpClient()),
+            OkHttpDataSource.Factory(ApiClient.streamingOkHttpClient()),
         )
         ExoPlayer.Builder(getApplication())
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(buildMediaSourceFactory(dataSourceFactory))
             // handleAudioFocus=true so ExoPlayer pauses itself on transient
             // audio focus loss (e.g. an incoming call ringing) and resumes
             // when focus is returned, without us wiring up an AudioManager
@@ -101,6 +147,75 @@ class PlayerViewModel(
             }
     }
 
+    /// Media3's default HLS playlist-stuck tolerance
+    /// (DefaultHlsPlaylistTracker.DEFAULT_PLAYLIST_STUCK_TARGET_DURATION_COEFFICIENT,
+    /// 3.5×) is tuned for a live encoder that's already running and just
+    /// pauses briefly — at the hub's 2s segment target-duration, that's
+    /// only ~7s before ExoPlayer gives up with a PlaylistStuckException.
+    /// A seek-restart here isn't a brief pause: the hub tears down and
+    /// restarts the WHOLE remux/transcode pipeline at a new position
+    /// first (confirmed by seeking far ahead in the field — the hub's
+    /// own seek accepted the request and reported a new part_base_ms,
+    /// but nothing had reached the playlist by the time ExoPlayer gave
+    /// up), which can legitimately take longer than 7s, especially
+    /// seeking deep into a large file. 30× (~60s here) gives the hub
+    /// realistic room to finish restarting while still eventually
+    /// failing loudly — surfacing as PlayerState.Error, not a silent
+    /// black screen — if something really is broken.
+    ///
+    /// DefaultMediaSourceFactory has no hook to reach into the HLS
+    /// delegate it builds internally, so this constructs the HLS branch
+    /// by hand and falls back to a plain DefaultMediaSourceFactory for
+    /// "direct" mode's progressive/byte-range files.
+    ///
+    /// DefaultMediaSourceFactory.createMediaSource() does two things for
+    /// any content type: builds the content MediaSource via whichever
+    /// delegate matches, THEN separately wraps each of MediaItem's own
+    /// sideloaded subtitleConfigurations (Text-delivery VTT — see
+    /// textDeliverySubtitleConfigs()) in a SingleSampleMediaSource and
+    /// merges them all with MergingMediaSource. That merging step lives
+    /// in DefaultMediaSourceFactory itself, NOT in HlsMediaSource.Factory
+    /// — calling hlsFactory.createMediaSource(mediaItem) directly (as
+    /// this did before) skips it entirely, silently dropping every
+    /// Text-delivery subtitle track for remux/transcode sessions. Ass/
+    /// Overlay delivery is unaffected either way (out-of-band HTTP taps,
+    /// never routed through MediaItem at all), which is why this
+    /// regression was easy to miss.
+    private fun buildMediaSourceFactory(dataSourceFactory: DataSource.Factory): MediaSource.Factory {
+        val hlsFactory = HlsMediaSource.Factory(dataSourceFactory)
+            .setPlaylistTrackerFactory { dsFactory, errorPolicy, parserFactory, cmcdConfig, executor ->
+                DefaultHlsPlaylistTracker(dsFactory, errorPolicy, parserFactory, cmcdConfig, HLS_PLAYLIST_STUCK_COEFFICIENT, executor)
+            }
+        val subtitleFactory = SingleSampleMediaSource.Factory(dataSourceFactory)
+        val progressiveFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        return object : MediaSource.Factory {
+            override fun createMediaSource(mediaItem: MediaItem): MediaSource {
+                if (mediaItem.localConfiguration?.mimeType != MimeTypes.APPLICATION_M3U8) {
+                    return progressiveFactory.createMediaSource(mediaItem)
+                }
+                val content = hlsFactory.createMediaSource(mediaItem)
+                val subtitleConfigs = mediaItem.localConfiguration?.subtitleConfigurations.orEmpty()
+                if (subtitleConfigs.isEmpty()) return content
+                val subtitleSources = subtitleConfigs.map { subtitleFactory.createMediaSource(it, C.TIME_UNSET) }
+                return MergingMediaSource(content, *subtitleSources.toTypedArray())
+            }
+
+            override fun getSupportedTypes(): IntArray = intArrayOf(C.CONTENT_TYPE_HLS, C.CONTENT_TYPE_OTHER)
+
+            override fun setDrmSessionManagerProvider(drmSessionManagerProvider: DrmSessionManagerProvider): MediaSource.Factory {
+                hlsFactory.setDrmSessionManagerProvider(drmSessionManagerProvider)
+                progressiveFactory.setDrmSessionManagerProvider(drmSessionManagerProvider)
+                return this
+            }
+
+            override fun setLoadErrorHandlingPolicy(loadErrorHandlingPolicy: LoadErrorHandlingPolicy): MediaSource.Factory {
+                hlsFactory.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                progressiveFactory.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                return this
+            }
+        }
+    }
+
     /// What the UI (PlayerView / its built-in controller) should hold.
     /// HLS sessions serve a growing EVENT playlist: a seek past what's
     /// been produced needs the hub to restart the pipeline elsewhere
@@ -114,10 +229,140 @@ class PlayerViewModel(
     /// been served locally — a fine trade for a first playback pass.
     val player: Player by lazy {
         object : ForwardingPlayer(realPlayer) {
-            override fun seekTo(positionMs: Long) = handleSeek(offsetMs + positionMs)
+            /// The seekbar now displays ABSOLUTE position/duration — the
+            /// full original video length, with the current position
+            /// marked at its true point (see getDuration()/
+            /// getCurrentPosition()/getCurrentTimeline() below) — not
+            /// "remaining time from 0", which put the scrubber at the
+            /// wrong end of the bar and made resuming partway through
+            /// look like starting over. PlayerControlView's drag-target
+            /// arithmetic is entirely derived from what we report it, so
+            /// a drag arrives here already in ABSOLUTE terms — no
+            /// offsetMs arithmetic needed (unlike before this change,
+            /// when the UI dealt in playlist-local terms).
+            override fun seekTo(positionMs: Long) = handleSeek(positionMs)
             override fun seekForward() = handleSeek(offsetMs + realPlayer.currentPosition + realPlayer.seekForwardIncrement)
             override fun seekBack() = handleSeek((offsetMs + realPlayer.currentPosition - realPlayer.seekBackIncrement).coerceAtLeast(0))
+
+            /// realPlayer's own duration only covers the HLS EVENT
+            /// playlist's currently-produced window (it grows as the
+            /// hub's pipeline keeps encoding) — reporting that straight
+            /// to PlayerView's DefaultTimeBar is why the seekbar showed
+            /// only a sliver instead of the whole video, with no way to
+            /// drag to, say, the 30-minute mark before the hub has
+            /// produced that far. The hub tells us the real total
+            /// (session.durationMs) up front; reporting it directly here
+            /// gives the seekbar its true, full length. Every seek
+            /// round-trips through the hub regardless of target (see
+            /// seekTo above), so dragging past what's currently produced
+            /// is exactly as valid as dragging inside it.
+            ///
+            /// getDuration()/getContentDuration() alone (tried first)
+            /// turned out not to be enough: disassembling
+            /// PlayerControlView.class (Media3's source isn't vendored
+            /// here) showed its time-bar update reads duration straight
+            /// off Timeline.Window/Timeline.Period.durationUs — summed
+            /// from getCurrentTimeline() — and only falls back to
+            /// getContentDuration() when the timeline is completely
+            /// empty. A real (short) HLS timeline always exists here, so
+            /// that fallback path never runs; the fix has to happen in
+            /// the Timeline itself, via getCurrentTimeline() below.
+            override fun getDuration(): Long = contentDurationOrSuper()
+
+            override fun getContentDuration(): Long = contentDurationOrSuper()
+
+            private fun contentDurationOrSuper(): Long =
+                session?.takeIf { it.mode != "direct" }?.durationMs ?: super.getDuration()
+
+            /// Companions to getDuration() above: PlayerControlView reads
+            /// getContentPosition()/getContentBufferedPosition() (a
+            /// Player-level pair, not derived from the Timeline, unlike
+            /// duration) straight into the time bar's scrubber and
+            /// buffered-shading. Without these, position/buffered stay
+            /// playlist-local (always starting near 0 for a fresh
+            /// attach) while duration reports the full video — putting
+            /// the scrubber at the wrong end of a bar that's otherwise
+            /// the right length, and shading "buffered" from the video's
+            /// start rather than from wherever playback actually is.
+            /// offsetMs reconstructs the absolute position the same way
+            /// reportProgressNow()/seekForward()/seekBack() already do;
+            /// "direct" mode needs no reconstruction since it's a real
+            /// byte-range file with true native seeking, already
+            /// absolute.
+            override fun getCurrentPosition(): Long = contentPositionOrSuper()
+
+            override fun getContentPosition(): Long = contentPositionOrSuper()
+
+            private fun contentPositionOrSuper(): Long =
+                if (session?.mode == "direct") super.getCurrentPosition() else offsetMs + realPlayer.currentPosition
+
+            override fun getBufferedPosition(): Long = contentBufferedPositionOrSuper()
+
+            override fun getContentBufferedPosition(): Long = contentBufferedPositionOrSuper()
+
+            private fun contentBufferedPositionOrSuper(): Long =
+                if (session?.mode == "direct") super.getBufferedPosition() else offsetMs + realPlayer.bufferedPosition
+
+            override fun isCurrentMediaItemSeekable(): Boolean =
+                if (session?.mode != "direct") true else super.isCurrentMediaItemSeekable()
+
+            /// ExoPlayer's own live detection (no #EXT-X-ENDLIST while
+            /// the hub is still producing, see attach()'s
+            /// LiveConfiguration note) would otherwise have PlayerView
+            /// treat this as a live broadcast — a "LIVE" badge instead
+            /// of a normal seekbar. It's a recording being produced on
+            /// demand, not a broadcast — always report it as VOD.
+            override fun isCurrentMediaItemLive(): Boolean = false
+
+            /// The actual fix for the seekbar's length: PlayerControlView
+            /// (and DefaultTimeBar underneath it) get the video's total
+            /// duration by summing Timeline.Period.durationUs across the
+            /// current Timeline.Window — never by calling a Player-level
+            /// getter — so overriding getDuration()/getContentDuration()
+            /// above was necessary but not sufficient. This wraps
+            /// whatever (short, HLS-window-limited) Timeline realPlayer
+            /// currently reports and rewrites the duration fields to the
+            /// hub's real, absolute total, leaving everything else (ad
+            /// state, period ids/uids, window count) untouched passthrough.
+            override fun getCurrentTimeline(): Timeline {
+                val real = super.getCurrentTimeline()
+                if (real.isEmpty) return real
+                val total = session?.takeIf { it.mode != "direct" }?.durationMs ?: return real
+                return DurationOverrideTimeline(real, total * 1000L)
+            }
         }
+    }
+
+    /// See getCurrentTimeline() above. Timeline has no public
+    /// ForwardingTimeline helper in this Media3 version, but its surface
+    /// is small (six abstract methods) — plain delegation for
+    /// everything, with getWindow()/getPeriod() additionally overwriting
+    /// the delegate-populated durationUs before returning it.
+    private class DurationOverrideTimeline(
+        private val delegate: Timeline,
+        private val totalDurationUs: Long,
+    ) : Timeline() {
+        override fun getWindowCount(): Int = delegate.windowCount
+
+        override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
+            delegate.getWindow(windowIndex, window, defaultPositionProjectionUs)
+            window.durationUs = totalDurationUs
+            window.isSeekable = true
+            window.isDynamic = false
+            return window
+        }
+
+        override fun getPeriodCount(): Int = delegate.periodCount
+
+        override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
+            delegate.getPeriod(periodIndex, period, setIds)
+            period.durationUs = totalDurationUs
+            return period
+        }
+
+        override fun getIndexOfPeriod(uid: Any): Int = delegate.getIndexOfPeriod(uid)
+
+        override fun getUidOfPeriod(periodIndex: Int): Any = delegate.getUidOfPeriod(periodIndex)
     }
 
     private var session: StartSessionResponse? = null
@@ -143,10 +388,45 @@ class PlayerViewModel(
                 if (!isPlaying) reportProgressNow()
             }
 
+            /// Diagnostic only: if the "start of video jumps forward"
+            /// behavior recurs after the LiveConfiguration fix in
+            /// attach(), this pins down whether ExoPlayer itself is
+            /// issuing the jump (reason would be INTERNAL, not SEEK —
+            /// SEEK is what our own handleSeek()/user drags produce) and
+            /// what position it's landing on, rather than guessing at
+            /// Media3 internals again.
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                if (kotlin.math.abs(newPosition.positionMs - oldPosition.positionMs) > 1000) {
+                    Log.d(
+                        TAG,
+                        "position discontinuity reason=$reason old=${oldPosition.positionMs} new=${newPosition.positionMs}",
+                    )
+                }
+            }
+
             override fun onPlayerError(error: PlaybackException) {
-                Log.e(TAG, "Playback failed for item=$itemId", error)
+                // sessionId (not itemId) is what names the hub's scratch
+                // dir (<data_dir>/sessions/<sessionId>/worker.log) — the
+                // thing to check when this is a hub-side pipeline stall,
+                // not a client bug.
+                Log.e(TAG, "Playback failed for item=$itemId sessionId=${session?.sessionId}", error)
                 progressJob?.cancel()
                 _state.value = PlayerState.Error("Playback failed: ${error.readableMessage()}")
+            }
+
+            /// Diagnostic only: pins down whether a "seek far ahead ->
+            /// black screen" report is ExoPlayer stuck BUFFERING forever
+            /// (no onPlayerError ever fires, so PlayerState.Error never
+            /// shows — matching a silent black screen) versus something
+            /// that never even reaches the player (state stays whatever
+            /// it was, no transition logged at all).
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                Log.d(
+                    TAG,
+                    "playback state -> $playbackState (item=$itemId) " +
+                        "currentPos=${realPlayer.currentPosition} bufferedPos=${realPlayer.bufferedPosition} " +
+                        "playWhenReady=${realPlayer.playWhenReady}",
+                )
             }
 
             /// Sideloaded subtitle track groups (attach()'s
@@ -181,11 +461,52 @@ class PlayerViewModel(
                         emptyList()
                     }
                 }
-                val session = repo.startSession(itemId, profile, startMs, subtitleTrack = _selectedSubtitleTrack.value?.id)
-                _subtitleTracks.value = subtitlesDeferred.await()
+                val session = repo.startSession(
+                    itemId,
+                    profile,
+                    startMs,
+                    audioTrack = initialAudioTrack,
+                    subtitleTrack = initialSubtitleTrackId,
+                )
+                val tracks = subtitlesDeferred.await()
+                _subtitleTracks.value = tracks
+                // The Detail screen only carries the chosen track's id
+                // through nav args; resolve it against the list once
+                // it's loaded so the picker UI and text-delivery override
+                // both see a real SubtitleTrack, not just its id.
+                _selectedSubtitleTrack.value = tracks.firstOrNull { it.id == initialSubtitleTrackId }
                 this@PlayerViewModel.session = session
-                offsetMs = session.partBaseMs ?: 0
-                attach(session, startPositionMs = (startMs - offsetMs).coerceAtLeast(0))
+                Log.d(
+                    TAG,
+                    "session started item=$itemId requestedStartMs=$startMs mode=${session.mode} " +
+                        "durationMs=${session.durationMs} partBaseMs=${session.partBaseMs}",
+                )
+                // offsetMs reconstructs the absolute video position from
+                // ExoPlayer's own (playlist-local) currentPosition
+                // elsewhere (reportProgressNow, the seek overrides,
+                // subtitle timing) — it must be the ABSOLUTE position
+                // this run's playlist starts at, i.e. startMs itself
+                // (confirmed against the hub: execute_seek/start()
+                // always hands the pipeline local_ms = abs_ms -
+                // part.base_ms, and the produced playlist's own t=0 is
+                // exactly that local_ms — so in absolute terms, t=0
+                // always equals the FULL requested position, not just
+                // the multi-part remainder). session.partBaseMs is a
+                // different, mostly-irrelevant-here concept (multi-part
+                // timeline stitching, 0 for virtually all content) that
+                // this used to read into offsetMs instead — every prior
+                // test happened to use startMs=0, where 0 and
+                // partBaseMs(0) are indistinguishable, which is exactly
+                // why this went unnoticed until a real seek target
+                // exposed it. startPositionMs is correspondingly always
+                // 0: this fresh playlist's own beginning IS where we
+                // asked the pipeline to start, mirroring the web
+                // client's unconditional `startPosition: 0` for hls.js.
+                // syncOrigin() below refines offsetMs once the true
+                // keyframe-snapped origin is known; it doesn't touch
+                // startPositionMs, which never needed correcting.
+                offsetMs = startMs
+                attach(session, startPositionMs = 0, requestedAbsMs = startMs)
                 _state.value = PlayerState.Ready
                 startProgressLoop()
             } catch (e: Exception) {
@@ -200,25 +521,155 @@ class PlayerViewModel(
             realPlayer.seekTo(targetMs)
             return
         }
+        Log.d(TAG, "seek requested item=$itemId sessionId=${session.sessionId} targetMs=$targetMs currentOffsetMs=$offsetMs")
         viewModelScope.launch {
             try {
                 realPlayer.pause()
                 val result = repo.seek(session.sessionId, targetMs, subtitleTrack = _selectedSubtitleTrack.value?.id)
-                offsetMs = result.partBaseMs ?: 0
-                attach(session, startPositionMs = (targetMs - offsetMs).coerceAtLeast(0))
+                // See start()'s comment: offsetMs is the ABSOLUTE
+                // position this fresh playlist starts at (targetMs
+                // itself), not result.partBaseMs — using partBaseMs here
+                // (previously ~0 for single-part content) made
+                // startPositionMs evaluate to targetMs verbatim, asking
+                // ExoPlayer to seek to a LOCAL position far outside the
+                // few-minutes-long fresh playlist's own timeline — it
+                // would sit there forever waiting for local content that
+                // was never going to arrive, which is exactly the "seek
+                // far ahead hangs at BUFFERING" bug.
+                offsetMs = targetMs
+                Log.d(TAG, "seek accepted by hub item=$itemId newPartBaseMs=${result.partBaseMs}")
+                attach(session, startPositionMs = 0, requestedAbsMs = targetMs)
             } catch (e: Exception) {
-                _state.value = PlayerState.Error("Seek failed: ${e.readableMessage()}")
+                // The old stream is untouched (we only paused) — resume it
+                // where it was and let the user retry the seek.
+                Log.w(TAG, "seek failed item=$itemId targetMs=$targetMs", e)
+                realPlayer.play()
+                _transientError.value = "Seek failed: ${e.readableMessage()}"
             }
         }
     }
 
-    private fun attach(session: StartSessionResponse, startPositionMs: Long) {
+    /// A burn pick needs the hub to (re)negotiate the whole plan — the
+    /// lightweight seek()-restart above assumes an EXISTING remux/
+    /// transcode pipeline (`session.plan`), which a "direct"-mode
+    /// session never has (direct is a raw byte passthrough; there's no
+    /// pipeline to seek within). A session that started direct because
+    /// no subtitle was picked yet can't be talked into burning one via
+    /// seek() at all, so a burn pick/un-pick instead tears down and
+    /// starts a brand new session at the current position — the same
+    /// call start() makes, just resuming instead of from startMs.
+    private fun restartSessionWithSubtitle(subtitleTrackId: Long?, revertTo: SubtitleTrack?) {
+        viewModelScope.launch {
+            try {
+                realPlayer.pause()
+                val positionMs = offsetMs + realPlayer.currentPosition
+                val profile = CapabilityProfileBuilder.build(getApplication())
+                val oldSessionId = session?.sessionId
+                val newSession = repo.startSession(
+                    itemId,
+                    profile,
+                    positionMs,
+                    audioTrack = initialAudioTrack,
+                    subtitleTrack = subtitleTrackId,
+                )
+                session = newSession
+                // See start()'s comment on offsetMs/startPositionMs.
+                offsetMs = positionMs
+                attach(newSession, startPositionMs = 0, requestedAbsMs = positionMs)
+                if (oldSessionId != null && oldSessionId != newSession.sessionId) {
+                    launch {
+                        try {
+                            repo.endSession(oldSessionId)
+                        } catch (e: Exception) {
+                            // Best-effort; the hub's own session reaper is the backstop.
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // The new session never started, so the old one is still
+                // valid — resume it and roll the picker back to the
+                // selection that's actually playing.
+                _selectedSubtitleTrack.value = revertTo
+                realPlayer.play()
+                _transientError.value = "Failed to switch subtitle: ${e.readableMessage()}"
+            }
+        }
+    }
+
+    private fun attach(session: StartSessionResponse, startPositionMs: Long, requestedAbsMs: Long) {
         val uri = ApiClient.baseUrl().trimEnd('/') + session.streamUrl
-        val mediaItem = MediaItem.Builder()
+        // Util.inferContentTypeForUriAndMimeType only recognizes HLS via an
+        // exact match on the literal "application/x-mpegURL" — the hub's
+        // session.contentType for remux/transcode is the more standard
+        // "application/vnd.apple.mpegurl" (or similar), which silently
+        // fails that match and sends DefaultMediaSourceFactory down the
+        // generic container-extractor path against what's actually an
+        // .m3u8 playlist (surfaces as "none of the extractors could read
+        // the stream" — there's no HLS extractor in that list at all).
+        // session.mode is the reliable signal already used in handleSeek:
+        // "direct" is a real byte-range file (session.contentType is
+        // accurate there), anything else is the HLS master playlist.
+        val mimeType = if (session.mode == "direct") session.contentType else MimeTypes.APPLICATION_M3U8
+        val subtitleConfigs = textDeliverySubtitleConfigs()
+        Log.d(TAG, "attach item=$itemId textDeliverySubtitleCount=${subtitleConfigs.size} ids=${subtitleConfigs.map { it.id }}")
+        val mediaItemBuilder = MediaItem.Builder()
             .setUri(uri)
-            .setMimeType(session.contentType)
-            .setSubtitleConfigurations(textDeliverySubtitleConfigs())
-            .build()
+            .setMimeType(mimeType)
+            .setSubtitleConfigurations(subtitleConfigs)
+        if (session.mode != "direct") {
+            // The hub's EVENT playlist has no #EXT-X-ENDLIST until the
+            // whole file has finished producing (kahawai-media's remux
+            // pipeline only appends it at EOS), so ExoPlayer's HLS
+            // implementation treats it as a live stream while it's still
+            // growing — computing its own "live edge" target position
+            // and nudging playback toward it, fighting the explicit
+            // startPositionMs passed to setMediaItem below (this is what
+            // made playback visibly skip forward a few seconds shortly
+            // after starting, even from position 0). The web client hits
+            // the exact same thing and disables it outright in hls.js
+            // (liveSyncDurationCount/liveMaxLatencyDurationCount, see
+            // Player.tsx's `attach` — "Watch from the beginning and never
+            // chase").
+            //
+            // targetOffsetMs means "how far BEHIND the live edge should
+            // playback sit" — left unset, Media3 computes its own small
+            // heuristic default, which is what caused the original
+            // "jumps to 9 seconds" bug. For a GROWING RECORDING, "the
+            // start of the video" is the far end of that spectrum, so a
+            // large-ish target forces the computed default position to
+            // clamp down to the window's actual start instead of landing
+            // a few seconds in.
+            //
+            // A previous version of this set targetOffsetMs/maxOffsetMs
+            // to 24 HOURS — which fixed the jump, but (evidenced by a
+            // seek-restart never reaching STATE_READY, hanging in
+            // STATE_BUFFERING indefinitely, while a fresh start with the
+            // SAME config reaches READY in ~200ms every time) also made
+            // ExoPlayer treat 24 hours as a buffering target on a
+            // seek-restart specifically — a physically impossible amount
+            // to accumulate, so it never left BUFFERING. That, in turn,
+            // meant it never played, so it never sent a progress report;
+            // the hub's own post-seek throttle (kahawai-media's
+            // install_pace_probe) gates further production on the
+            // client's reported viewer position catching up to within a
+            // window of what's already produced — so the client waiting
+            // on the hub and the hub waiting on the client deadlocked
+            // permanently. Three minutes is comfortably past what the
+            // original few-seconds bug needed, and comfortably short of
+            // "impossible to buffer" — long enough to survive the fix,
+            // short enough not to recreate this deadlock.
+            val liveOffsetMs = TimeUnit.MINUTES.toMillis(3)
+            mediaItemBuilder.setLiveConfiguration(
+                MediaItem.LiveConfiguration.Builder()
+                    .setMinPlaybackSpeed(1f)
+                    .setMaxPlaybackSpeed(1f)
+                    .setTargetOffsetMs(liveOffsetMs)
+                    .setMinOffsetMs(0)
+                    .setMaxOffsetMs(liveOffsetMs)
+                    .build(),
+            )
+        }
+        val mediaItem = mediaItemBuilder.build()
         realPlayer.setMediaItem(mediaItem, startPositionMs)
         realPlayer.prepare()
         realPlayer.playWhenReady = true
@@ -234,11 +685,114 @@ class PlayerViewModel(
         // AssSubtitleOverlay/ImageSubtitleOverlay know to reconnect even
         // though streamBaseUrl itself doesn't change within one session.
         subtitleEpoch++
+        val streamBaseUrl = uri.substringBeforeLast('/') + "/"
         _subtitleSession.value = SubtitleSession(
-            streamBaseUrl = uri.substringBeforeLast('/') + "/",
+            streamBaseUrl = streamBaseUrl,
             offsetMs = offsetMs,
             epoch = subtitleEpoch,
         )
+        // offsetMs (partBaseMs) is only correct for multi-part timeline
+        // stitching — it says nothing about where the pipeline actually
+        // landed within ITS part, which is 0 only when the requested
+        // position happens to fall exactly on a keyframe. Every other
+        // case snaps backward to the nearest keyframe at-or-before it,
+        // and the true origin is knowable only once the pipeline reports
+        // it. "direct" mode is a raw byte-range file with real seeking —
+        // no pipeline-local timeline to correct. Starting from the true
+        // beginning (0) is skipped too: 0 is always a keyframe, so
+        // there's nothing to correct and no reason to pay the round trip.
+        if (session.mode != "direct" && requestedAbsMs != 0L) {
+            syncOrigin(session, streamBaseUrl, subtitleEpoch)
+        }
+    }
+
+    /// Corrects the optimistic [offsetMs] once the hub reports the
+    /// pipeline's true (keyframe-snapped) origin via the session's
+    /// `start.pos` sidecar — mirrors web/src/views/Player.tsx's
+    /// syncOrigin ("players align subtitles/seekbar to it", per the
+    /// hub's own session_file comment). The mismatch this corrects is
+    /// exactly what shows up as ASS/overlay subtitles (read live off
+    /// [subtitleSession]) and the reported/seekbar position drifting out
+    /// of sync with the video specifically when resuming or seeking into
+    /// the middle of something — never when starting from the beginning.
+    ///
+    /// The correction is applied to the SAME [SubtitleSession] instance
+    /// (no epoch bump): overlay composables must read [offsetMs] live
+    /// rather than capture it once, or they'd miss this. Text-delivery
+    /// VTT is a separate story — its shift_ms is baked into a sideloaded
+    /// MediaItem.SubtitleConfiguration at prepare() time, and correcting
+    /// it live would need a full re-prepare (a visible rebuffer) just to
+    /// fix subtitle timing, a worse trade than leaving it as-is.
+    ///
+    /// [start.pos] may not exist yet the instant a fresh pipeline starts,
+    /// so this retries a few times before giving up — same shape as the
+    /// web client's 3-attempt/700ms backoff. [forEpoch] guards against a
+    /// stale attempt (a slow retry from a PREVIOUS attach()) landing
+    /// after a newer seek/restart has already superseded it.
+    private fun syncOrigin(session: StartSessionResponse, streamBaseUrl: String, forEpoch: Int) {
+        val optimisticOffsetMs = offsetMs
+        viewModelScope.launch {
+            repeat(3) { attempt ->
+                if (subtitleEpoch != forEpoch) {
+                    Log.d(TAG, "syncOrigin abandoned epoch=$forEpoch (superseded, now ${subtitleEpoch}) attempt=$attempt")
+                    return@launch
+                }
+                try {
+                    // Both execute() AND reading the response body are
+                    // blocking calls — viewModelScope.launch{} defaults to
+                    // Dispatchers.Main.immediate, so without this the very
+                    // first one trips StrictMode's
+                    // NetworkOnMainThreadException on every single attempt.
+                    // That exception was being swallowed by the catch
+                    // below (logged, then retried, 3 times, always the
+                    // same failure) — meaning this correction has never
+                    // actually landed once, since it was first written.
+                    // AssSubtitleOverlay's own blocking OkHttp calls
+                    // already do this correctly; this one just didn't.
+                    // Everything that touches the response has to stay
+                    // inside the IO-confined block too, not just execute()
+                    // itself.
+                    val local = withContext(Dispatchers.IO) {
+                        ApiClient.authenticatedOkHttpClient()
+                            .newCall(Request.Builder().url("${streamBaseUrl}start.pos").build())
+                            .execute()
+                            .use { response ->
+                                if (!response.isSuccessful) {
+                                    Log.d(TAG, "syncOrigin http ${response.code} epoch=$forEpoch attempt=$attempt")
+                                    return@use null
+                                }
+                                val raw = response.body?.string()?.trim()
+                                val parsed = raw?.toDoubleOrNull()?.let(Math::round)
+                                if (parsed == null) Log.d(TAG, "syncOrigin unparseable epoch=$forEpoch attempt=$attempt raw=$raw")
+                                parsed
+                            }
+                    }
+                    if (local != null) {
+                        val corrected = (session.partBaseMs ?: 0) + local
+                        val inBounds = kotlin.math.abs(corrected - offsetMs) < 60_000
+                        Log.d(
+                            TAG,
+                            "syncOrigin epoch=$forEpoch attempt=$attempt local=$local " +
+                                "partBaseMs=${session.partBaseMs} optimisticOffsetMs=$optimisticOffsetMs " +
+                                "corrected=$corrected currentOffsetMs=$offsetMs inBounds=$inBounds",
+                        )
+                        // Sanity-bounded like the web client: a wildly
+                        // different value means we're reading the wrong
+                        // session/a stale file, not a real keyframe snap.
+                        if (subtitleEpoch == forEpoch && corrected != offsetMs && inBounds) {
+                            offsetMs = corrected
+                            _subtitleSession.value = _subtitleSession.value?.copy(offsetMs = corrected)
+                            Log.d(TAG, "syncOrigin applied epoch=$forEpoch offsetMs=$corrected")
+                        }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "syncOrigin fetch failed epoch=$forEpoch attempt=$attempt", e)
+                    // Not ready yet, or a transient network hiccup — retry.
+                }
+                delay(700)
+            }
+        }
     }
 
     /// Media3 can't attach a new [MediaItem.SubtitleConfiguration] to an
@@ -282,14 +836,26 @@ class PlayerViewModel(
     /// AssSubtitleOverlay/ImageSubtitleOverlay observing [selectedSubtitleTrack]
     /// + [subtitleSession] — neither needs a session restart, matching the
     /// hub's own rule that a text/ass/downloaded pick has no plan impact
-    /// (the client fetches those itself). The id rides along on the next
-    /// natural startSession/seek call for the hub's own bookkeeping.
+    /// (the client fetches those itself).
+    ///
+    /// A "burn" pick is different: the hub bakes it into the encoded
+    /// video server-side, and — now that the Detail screen can
+    /// pre-select a subtitle before Play — a session can arrive here
+    /// already burning one. Undoing or changing that is a plan change
+    /// only the hub can make, so a burn pick on either end of the
+    /// switch restarts the session (see [restartSessionWithSubtitle])
+    /// instead of the client-only override below.
     fun selectSubtitleTrack(track: SubtitleTrack?) {
+        val previous = _selectedSubtitleTrack.value
         _selectedSubtitleTrack.value = track
-        // Text delivery lives on tracks attached at the START of the
-        // CURRENT MediaItem (realPlayer.currentTracks), so this doesn't
-        // need a fresh attach() — unlike the initial sideload list itself.
-        applySubtitleTrackSelectionOverride()
+        if (previous?.delivery == "burn" || track?.delivery == "burn") {
+            restartSessionWithSubtitle(track?.id, revertTo = previous)
+        } else {
+            // Text delivery lives on tracks attached at the START of the
+            // CURRENT MediaItem (realPlayer.currentTracks), so this doesn't
+            // need a fresh attach() — unlike the initial sideload list itself.
+            applySubtitleTrackSelectionOverride()
+        }
     }
 
     private fun startProgressLoop() {
@@ -297,7 +863,35 @@ class PlayerViewModel(
         progressJob = viewModelScope.launch {
             while (isActive) {
                 delay(PROGRESS_INTERVAL_MS)
-                if (realPlayer.isPlaying) reportProgressNow()
+                // Diagnostic: onPlaybackStateChanged only logs on
+                // transitions, so it goes silent for the whole
+                // duration of a stuck BUFFERING period. This fires
+                // every tick regardless, to show whether
+                // currentPosition/bufferedPosition are moving at all
+                // while stuck.
+                Log.d(
+                    TAG,
+                    "progress tick item=$itemId state=${realPlayer.playbackState} " +
+                        "currentPos=${realPlayer.currentPosition} bufferedPos=${realPlayer.bufferedPosition} " +
+                        "playWhenReady=${realPlayer.playWhenReady}",
+                )
+                // playWhenReady, not isPlaying — mirrors the web client's
+                // gate (web/src/views/Player.tsx's tick: `if
+                // (!video.paused) report()`). HTML5's `.paused` only
+                // reflects an explicit pause() call, staying false
+                // through a stall/rebuffer; ExoPlayer's isPlaying is
+                // stricter — false during BUFFERING too, not just
+                // PAUSED. Gating on isPlaying meant a seek-restart stuck
+                // in BUFFERING never reported progress at all, which
+                // silently starved the hub's own post-seek throttle
+                // (kahawai-media's install_pace_probe gates further
+                // production on viewer.pos catching up to what's already
+                // produced) — client and hub waiting on each other,
+                // permanently. playWhenReady stays true straight through
+                // buffering, exactly like `!paused`, and only goes false
+                // on the explicit pause() handleSeek() already does
+                // before restarting.
+                if (realPlayer.playWhenReady) reportProgressNow()
             }
         }
     }
@@ -308,7 +902,9 @@ class PlayerViewModel(
         viewModelScope.launch {
             try {
                 repo.reportProgress(session.sessionId, positionMs)
+                Log.d(TAG, "progress reported sessionId=${session.sessionId} positionMs=$positionMs")
             } catch (e: Exception) {
+                Log.w(TAG, "progress report failed sessionId=${session.sessionId} positionMs=$positionMs", e)
                 // Best-effort, like the web client's beforeunload report.
             }
         }

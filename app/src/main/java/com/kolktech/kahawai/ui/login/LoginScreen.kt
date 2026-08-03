@@ -18,7 +18,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -54,9 +60,11 @@ fun LoginScreen(
             onValueChange = { username = it },
             label = { Text("Username") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 16.dp),
+                .padding(top = 16.dp)
+                .semantics { contentType = ContentType.Username },
         )
         OutlinedTextField(
             value = password,
@@ -64,9 +72,14 @@ fun LoginScreen(
             label = { Text("Password") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
+            // KeyboardType.Password keeps the IME from learning/suggesting
+            // the value; the autofill ContentType lets password managers
+            // offer (and offer to save) credentials for this hub.
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp),
+                .padding(top = 8.dp)
+                .semantics { contentType = ContentType.Password },
         )
         if (state is LoginState.Error) {
             Text(

@@ -24,14 +24,16 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.kolktech.kahawai.data.auth.ServerConfigStore
+import com.kolktech.kahawai.data.auth.TokenStore
 
 @Composable
 fun ServerSetupScreen(
     serverConfigStore: ServerConfigStore,
+    tokenStore: TokenStore,
     onReady: () -> Unit,
 ) {
     val viewModel: ServerSetupViewModel = viewModel(
-        factory = viewModelFactory { initializer { ServerSetupViewModel(serverConfigStore) } },
+        factory = viewModelFactory { initializer { ServerSetupViewModel(serverConfigStore, tokenStore) } },
     )
     val state by viewModel.state.collectAsState()
     var urlInput by remember { mutableStateOf(serverConfigStore.baseUrl.orEmpty()) }

@@ -13,6 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -106,6 +107,13 @@ fun ImageSubtitleOverlay(
     val sets = remember(subtitleSession.epoch, track.id) { mutableStateOf(emptyList<DisplaySet>()) }
     var currentSet by remember(subtitleSession.epoch, track.id) { mutableStateOf<DisplaySet?>(null) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    // subtitleSession is a plain parameter — the render loop below is a
+    // LaunchedEffect keyed on (epoch, track.id) only, so a coroutine
+    // launched from it would otherwise only ever see the offsetMs it
+    // captured at launch, missing any later correction from
+    // PlayerViewModel.syncOrigin (applied in place, without an epoch
+    // bump — see SubtitleSession's doc comment).
+    val currentSubtitleSession by rememberUpdatedState(subtitleSession)
 
     LaunchedEffect(subtitleSession.epoch, track.id) {
         val url = "${subtitleSession.streamBaseUrl}subs-${track.id}.jsonl"
@@ -147,7 +155,7 @@ fun ImageSubtitleOverlay(
     // well inside PGS timing tolerance.
     LaunchedEffect(subtitleSession.epoch, track.id) {
         while (isActive) {
-            val t = player.currentPosition + subtitleSession.offsetMs
+            val t = player.currentPosition + currentSubtitleSession.offsetMs
             currentSet = sets.value.lastOrNull { it.startMs <= t }
             delay(200)
         }

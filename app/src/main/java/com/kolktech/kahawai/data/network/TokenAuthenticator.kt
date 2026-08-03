@@ -5,6 +5,7 @@ import okhttp3.Authenticator
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.Route
+import retrofit2.HttpException
 import com.kolktech.kahawai.data.auth.TokenStore
 import com.kolktech.kahawai.data.network.dto.RefreshRequest
 
@@ -39,11 +40,17 @@ class TokenAuthenticator(
                     tokenStore.save(tokens)
                     tokens
                 }
+            } catch (e: HttpException) {
+                // Only a definitive rejection from the refresh endpoint
+                // (revoked/expired refresh token) ends the session. A 5xx
+                // is the hub having a bad moment, not a verdict on the
+                // token — keep it and let a later request retry.
+                if (e.code() in 400..499) runBlocking { tokenStore.clear() }
+                return null
             } catch (e: Exception) {
-                null
-            }
-            if (newTokens == null) {
-                runBlocking { tokenStore.clear() }
+                // Transient failure (dead Wi-Fi, hub unreachable): the
+                // session is likely still valid — fail this request but
+                // keep the tokens for when the network comes back.
                 return null
             }
             return response.request.newBuilder()

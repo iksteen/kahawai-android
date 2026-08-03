@@ -53,6 +53,35 @@ data class ItemMetadata(
     val genres: List<String>? = null,
 )
 
+/// Mirrors `VideoStream`/`AudioStream` in crates/kahawai-core/src/media.rs —
+/// only the fields the UI shows; the prober reports more than this.
+@Serializable
+data class VideoStreamInfo(
+    val codec: String,
+    val width: Int,
+    val height: Int,
+    val hdr: String? = null,
+)
+
+@Serializable
+data class AudioStreamInfo(
+    val codec: String,
+    val channels: Int,
+    val language: String? = null,
+)
+
+/// Mirrors `MediaInfo` (crates/kahawai-core/src/media.rs) — the raw probe
+/// for one source file. `audio`'s index is what `StartSessionRequest.audioTrack`
+/// selects by (sessions.rs negotiates against `info.audio[audio_track]` of
+/// the FIRST/best source, same ordering as [ItemDetail.sources]).
+@Serializable
+data class MediaStreams(
+    val container: String? = null,
+    val durationMs: Long? = null,
+    val video: List<VideoStreamInfo> = emptyList(),
+    val audio: List<AudioStreamInfo> = emptyList(),
+)
+
 /// crates/kahawai-hub/src/api.rs:2199-2233 — one playable source file
 /// backing an item.
 @Serializable
@@ -63,6 +92,7 @@ data class Source(
     val size: Long,
     val available: Boolean,
     val revision: Int,
+    val streams: MediaStreams? = null,
 )
 
 /// The detail endpoint (crates/kahawai-hub/src/api.rs:2171-2311)

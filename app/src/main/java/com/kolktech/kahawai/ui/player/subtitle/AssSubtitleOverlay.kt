@@ -6,12 +6,13 @@ import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -25,12 +26,19 @@ import com.kolktech.kahawai.ui.player.SubtitleSession
 import io.github.peerless2012.ass.Ass
 import io.github.peerless2012.ass.AssFrame
 import io.github.peerless2012.ass.AssTexType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 
 private const val TAG = "AssSubtitleOverlay"
 
@@ -58,104 +66,183 @@ fun AssSubtitleOverlay(
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var frame by remember(subtitleSession.epoch, track.id) { mutableStateOf<AssFrame?>(null) }
     var frameSize by remember(subtitleSession.epoch, track.id) { mutableStateOf(IntSize.Zero) }
+    // resizeMode and subtitleSession are plain parameters, not
+    // MutableState — a coroutine that captures either directly only ever
+    // sees the value from when it launched. The render loop below lives
+    // inside a LaunchedEffect keyed ONLY on (epoch, track.id) now (see
+    // the ass/assRender lifecycle note ahead), so it needs
+    // rememberUpdatedState to keep seeing live resize-mode toggles AND
+    // PlayerViewModel.syncOrigin's offsetMs corrections — without either
+    // needing to restart the loop (a resize toggle) or reconnect the .ass
+    // tap (an offsetMs correction, which arrives on the SAME epoch by
+    // design; see SubtitleSession's doc comment).
+    val currentResizeMode by rememberUpdatedState(resizeMode)
+    val currentSubtitleSession by rememberUpdatedState(subtitleSession)
 
-    val ass = remember(subtitleSession.epoch, track.id) { Ass() }
-    DisposableEffect(ass) { onDispose { ass.release() } }
-
-    val assRender = remember(ass) { ass.createRender() }
-    DisposableEffect(assRender) { onDispose { assRender.release() } }
-
-    // Fonts, then the track (header + growing Dialogue feed from the
-    // session's live .ass tap).
+    // ass/assRender's entire native lifecycle — create, feed fonts/track,
+    // render, release — now lives inside ONE coroutine, rather than
+    // remember{} + a separate DisposableEffect(onDispose { ...release() }).
+    // The old split let release() run on the main thread (as soon as a
+    // subtitle switch changed the remember key) while a renderFrame()
+    // call issued moments earlier could still be executing on a
+    // Dispatchers.Default thread — freeing the native handle out from
+    // under an in-flight native call is a use-after-free, which crashes
+    // the whole process (SIGSEGV/native abort) with nothing catchable as
+    // a Kotlin exception — matching reports of the app dying with no
+    // AndroidRuntime entry in logcat after several subtitle switches
+    // (every switch/seek-restart tears down and recreates ass/assRender,
+    // so repeating it is repeated rolls of the dice on hitting that
+    // window). coroutineScope{} below guarantees BOTH children (font/tap
+    // loading and the render loop) have fully finished — including
+    // letting an in-flight native call return, not just cancelling it —
+    // before the `finally` frees anything.
     LaunchedEffect(subtitleSession.epoch, track.id) {
+        val ass = Ass()
+        val assRender = ass.createRender()
         try {
-            val fonts = repo.fonts(itemId).fonts
-            fonts.forEachIndexed { index, name ->
-                val bytes = withContext(Dispatchers.IO) {
-                    fetchBytes("${ApiClient.baseUrl().trimEnd('/')}/api/v1/items/$itemId/fonts/$index")
-                }
-                if (bytes != null) ass.addFont(name, bytes) else Log.w(TAG, "font $name ($index) failed to load")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "font list failed for item=$itemId", e)
-        }
-
-        val assTrack = ass.createTrack()
-        assRender.setTrack(assTrack)
-
-        val url = "${subtitleSession.streamBaseUrl}subs-${track.id}.ass"
-        withContext(Dispatchers.IO) {
-            try {
-                val client = ApiClient.authenticatedOkHttpClient().newBuilder()
-                    // Long-lived, growing stream (header, then Dialogue
-                    // lines as the demux pass reaches them) — must not
-                    // time out while idle.
-                    .readTimeout(0, TimeUnit.SECONDS)
-                    .build()
-                client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                    val source = response.body?.source() ?: return@use
-                    val header = StringBuilder()
-                    var sawEvents = false
-                    var headerDone = false
-                    // Accumulate from the very start ([Script Info],
-                    // [V4+ Styles], ...) through the Events "Format:"
-                    // line — libass needs all of it, same span JASSUB's
-                    // subContent covers on the web.
-                    while (isActive && !headerDone) {
-                        val line = source.readUtf8Line() ?: break
-                        header.append(line).append('\n')
-                        if (!sawEvents && line.trim().equals("[Events]", ignoreCase = true)) sawEvents = true
-                        if (sawEvents && line.trim().startsWith("Format:", ignoreCase = true)) headerDone = true
+            coroutineScope {
+                launch {
+                    try {
+                        val fonts = repo.fonts(itemId).fonts
+                        // Fetched concurrently, not one at a time: a
+                        // styled ASS track (karaoke/anime content
+                        // especially) can embed a dozen+ fonts, and
+                        // createTrack()/the .ass tap connection below
+                        // both wait on this finishing.
+                        val loaded = fonts.mapIndexed { index, name ->
+                            async(Dispatchers.IO) {
+                                name to fetchBytes("${ApiClient.baseUrl().trimEnd('/')}/api/v1/items/$itemId/fonts/$index")
+                            }
+                        }.awaitAll()
+                        loaded.forEach { (name, bytes) ->
+                            if (bytes != null) ass.addFont(name, bytes) else Log.w(TAG, "font $name failed to load")
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "font list failed for item=$itemId", e)
                     }
-                    if (!headerDone) return@use
-                    assTrack.readBuffer(header.toString().toByteArray())
-                    // Each subsequent Dialogue line is re-fed with the
-                    // section marker so libass's line-oriented parser
-                    // stays in [Events] context — mirrors JASSUB's
-                    // `processData('[Events]\n' + lines)`, just per-line
-                    // instead of batched (dialogue lines never embed a
-                    // newline, so this is equally correct).
+
+                    // Cancellation is cooperative: if the font list came
+                    // back empty, the block above returns without ever
+                    // suspending again after repo.fonts() resolves, so a
+                    // cancel() requested in that exact window has no
+                    // suspension point left to surface it as an
+                    // exception. ensureActive() forces the check
+                    // explicitly before touching the native track.
+                    ensureActive()
+                    val assTrack = ass.createTrack()
+                    assRender.setTrack(assTrack)
+
+                    val url = "${subtitleSession.streamBaseUrl}subs-${track.id}.ass"
+                    withContext(Dispatchers.IO) {
+                        val client = ApiClient.authenticatedOkHttpClient().newBuilder()
+                            // Long-lived, growing stream (header, then
+                            // Dialogue lines as the demux pass reaches
+                            // them) — must not time out while idle.
+                            .readTimeout(0, TimeUnit.SECONDS)
+                            .build()
+                        val call = client.newCall(Request.Builder().url(url).build())
+                        // execute()/readUtf8Line() are blocking calls
+                        // that don't check coroutine cancellation
+                        // between reads — only Call.cancel() actually
+                        // interrupts a stalled read, by closing the
+                        // socket. Without this hook, a cancelled
+                        // coroutine leaves this readTimeout(0) connection
+                        // open until the hub happens to send another
+                        // line or closes it itself.
+                        val cancelHandle = coroutineContext.job.invokeOnCompletion { call.cancel() }
+                        try {
+                            call.execute().use { response ->
+                                val source = response.body?.source() ?: return@use
+                                val header = StringBuilder()
+                                var sawEvents = false
+                                var headerDone = false
+                                // Accumulate from the very start
+                                // ([Script Info], [V4+ Styles], ...)
+                                // through the Events "Format:" line —
+                                // libass needs all of it, same span
+                                // JASSUB's subContent covers on the web.
+                                while (isActive && !headerDone) {
+                                    val line = source.readUtf8Line() ?: break
+                                    header.append(line).append('\n')
+                                    if (!sawEvents && line.trim().equals("[Events]", ignoreCase = true)) sawEvents = true
+                                    if (sawEvents && line.trim().startsWith("Format:", ignoreCase = true)) headerDone = true
+                                }
+                                if (!headerDone) return@use
+                                assTrack.readBuffer(header.toString().toByteArray())
+                                // Each subsequent Dialogue line is
+                                // re-fed with the section marker so
+                                // libass's line-oriented parser stays in
+                                // [Events] context — mirrors JASSUB's
+                                // `processData('[Events]\n' + lines)`,
+                                // just per-line instead of batched
+                                // (dialogue lines never embed a newline,
+                                // so this is equally correct).
+                                while (isActive) {
+                                    val line = source.readUtf8Line() ?: break
+                                    if (line.isBlank()) continue
+                                    assTrack.readBuffer("[Events]\n$line\n".toByteArray())
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, ".ass tap failed for track=${track.id}", e)
+                        } finally {
+                            cancelHandle.dispose()
+                        }
+                    }
+                }
+
+                // Drives redraws off the player clock. renderFrame is a
+                // synchronized native call over potentially-uncached
+                // glyphs — run it off the main thread, mirroring the
+                // library's own AssExecutor.
+                //
+                // Paced by the display frame clock, not a coarse poll:
+                // JASSUB on the web renders every video frame, and ASS
+                // timing needs that — a delay(200) loop shows every
+                // event up to 200ms late (visible lag against the
+                // audio) and plays \t/\move/karaoke at 5fps. libass
+                // caches rasterized glyphs, so a frame where nothing
+                // changed is a cheap no-op (changed == 0); when a render
+                // does run long, this sequential loop just skips
+                // display frames rather than queueing.
+                launch {
                     while (isActive) {
-                        val line = source.readUtf8Line() ?: break
-                        if (line.isBlank()) continue
-                        assTrack.readBuffer("[Events]\n$line\n".toByteArray())
+                        withFrameMillis { }
+                        val videoSize = player.videoSize
+                        if (videoSize.width > 0 && videoSize.height > 0 && containerSize.width > 0 && containerSize.height > 0) {
+                            val rect = contentRectFor(
+                                containerW = containerSize.width.toFloat(),
+                                containerH = containerSize.height.toFloat(),
+                                videoW = videoSize.width.toFloat(),
+                                videoH = videoSize.height.toFloat(),
+                                resizeMode = currentResizeMode,
+                            )
+                            val w = rect.width.toInt().coerceAtLeast(2)
+                            val h = rect.height.toInt().coerceAtLeast(2)
+                            if (frameSize.width != w || frameSize.height != h) {
+                                assRender.setStorageSize(videoSize.width, videoSize.height)
+                                assRender.setFrameSize(w, h)
+                                frameSize = IntSize(w, h)
+                            }
+                            val t = player.currentPosition + currentSubtitleSession.offsetMs
+                            val result = withContext(Dispatchers.Default) { assRender.renderFrame(t, AssTexType.BITMAP_ALPHA) }
+                            if (result != null && result.changed != 0) frame = result
+                        }
                     }
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, ".ass tap failed for track=${track.id}", e)
             }
-        }
-    }
-
-    // Recompute libass's storage/frame size whenever the displayed
-    // content box changes (container resize, rotation, resize-mode
-    // toggle, or the video's own size becoming known shortly after
-    // prepare), and drive redraws off the player clock. renderFrame is a
-    // synchronized native call over potentially-uncached glyphs — run it
-    // off the main thread, mirroring the library's own AssExecutor.
-    LaunchedEffect(subtitleSession.epoch, track.id, containerSize, resizeMode) {
-        while (isActive) {
-            val videoSize = player.videoSize
-            if (videoSize.width > 0 && videoSize.height > 0 && containerSize.width > 0 && containerSize.height > 0) {
-                val rect = contentRectFor(
-                    containerW = containerSize.width.toFloat(),
-                    containerH = containerSize.height.toFloat(),
-                    videoW = videoSize.width.toFloat(),
-                    videoH = videoSize.height.toFloat(),
-                    resizeMode = resizeMode,
-                )
-                val w = rect.width.toInt().coerceAtLeast(2)
-                val h = rect.height.toInt().coerceAtLeast(2)
-                if (frameSize.width != w || frameSize.height != h) {
-                    assRender.setStorageSize(videoSize.width, videoSize.height)
-                    assRender.setFrameSize(w, h)
-                    frameSize = IntSize(w, h)
-                }
-                val t = player.currentPosition + subtitleSession.offsetMs
-                val result = withContext(Dispatchers.Default) { assRender.renderFrame(t, AssTexType.BITMAP_ALPHA) }
-                if (result != null && result.changed != 0) frame = result
-            }
-            delay(200)
+        } finally {
+            // Only reached once coroutineScope{} above has confirmed
+            // BOTH children are fully done — no renderFrame()/readBuffer()
+            // call can still be in flight on another thread past this
+            // point, so releasing here can't race a native call the way
+            // a separate DisposableEffect could.
+            assRender.release()
+            ass.release()
         }
     }
 

@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import com.kolktech.kahawai.data.auth.ServerConfigStore
+import com.kolktech.kahawai.data.auth.TokenStore
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.readableMessage
 
@@ -16,7 +18,10 @@ sealed interface ServerSetupState {
     data object ReadyForLogin : ServerSetupState
 }
 
-class ServerSetupViewModel(private val serverConfigStore: ServerConfigStore) : ViewModel() {
+class ServerSetupViewModel(
+    private val serverConfigStore: ServerConfigStore,
+    private val tokenStore: TokenStore,
+) : ViewModel() {
     private val _state = MutableStateFlow<ServerSetupState>(ServerSetupState.Idle)
     val state: StateFlow<ServerSetupState> = _state
 
@@ -30,25 +35,43 @@ class ServerSetupViewModel(private val serverConfigStore: ServerConfigStore) : V
             _state.value = ServerSetupState.Error("Enter your hub's address")
             return
         }
-        val url = if (trimmed.contains("://")) trimmed else "http://$trimmed"
-        checkServer(url)
+        // HttpUrl only parses http/https, so this rejects both stray
+        // schemes (ftp://…) and typos ("htp://…", "http:/…") outright
+        // instead of persisting them and failing on the network.
+        val candidate = if (trimmed.contains("://")) trimmed else "http://$trimmed"
+        val parsed = candidate.toHttpUrlOrNull()
+        if (parsed == null) {
+            _state.value = ServerSetupState.Error("That doesn't look like a valid http:// or https:// address")
+            return
+        }
+        checkServer(parsed.toString())
     }
 
     private fun checkServer(url: String) {
         _state.value = ServerSetupState.Loading
-        serverConfigStore.baseUrl = url
-        ApiClient.reset()
         viewModelScope.launch {
             try {
-                val bootstrap = ApiClient.plainApiService().bootstrap()
-                _state.value = if (bootstrap.setupRequired) {
-                    ServerSetupState.Error(
+                // Probed against the candidate URL directly — nothing is
+                // persisted until the hub actually answers, so a typo'd
+                // address never becomes the stored base URL.
+                val bootstrap = ApiClient.probeApiService(url).bootstrap()
+                if (bootstrap.setupRequired) {
+                    _state.value = ServerSetupState.Error(
                         "This hub hasn't completed first-time setup yet. " +
                             "Finish setup via the web UI, then come back here.",
                     )
-                } else {
-                    ServerSetupState.ReadyForLogin
+                    return@launch
                 }
+                val previous = serverConfigStore.baseUrl
+                serverConfigStore.baseUrl = url
+                ApiClient.reset()
+                // Tokens are per-hub; carrying the old hub's pair to a new
+                // one just guarantees a 401 (and sends credentials where
+                // they don't belong).
+                if (previous != null && previous.trimEnd('/') != url.trimEnd('/')) {
+                    tokenStore.clear()
+                }
+                _state.value = ServerSetupState.ReadyForLogin
             } catch (e: Exception) {
                 _state.value = ServerSetupState.Error("Couldn't reach $url: ${e.readableMessage()}")
             }

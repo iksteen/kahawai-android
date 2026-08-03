@@ -1,7 +1,9 @@
 package com.kolktech.kahawai.ui.nav
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -10,37 +12,56 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.kolktech.kahawai.KahawaiApp
+import kotlinx.coroutines.launch
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.detail.DetailScreen
+import com.kolktech.kahawai.ui.home.HomeScreen
+import com.kolktech.kahawai.ui.library.LibraryScreen
 import com.kolktech.kahawai.ui.login.LoginScreen
-import com.kolktech.kahawai.ui.main.MainScreen
 import com.kolktech.kahawai.ui.player.PlayerScreen
+import com.kolktech.kahawai.ui.search.SearchScreen
 import com.kolktech.kahawai.ui.setup.ServerSetupScreen
 
 private object Routes {
     const val SETUP = "setup"
     const val LOGIN = "login"
     const val HOME = "home"
+    const val SEARCH = "search"
+    const val LIBRARY = "library/{libraryId}?name={name}"
     const val DETAIL = "detail/{itemId}"
-    const val PLAYER = "player/{itemId}?startMs={startMs}"
+    const val PLAYER = "player/{itemId}?startMs={startMs}&audioTrack={audioTrack}&subtitleTrack={subtitleTrack}"
+    fun library(libraryId: String, name: String) = "library/$libraryId?name=${Uri.encode(name)}"
     fun detail(itemId: String) = "detail/$itemId"
-    fun player(itemId: String, startMs: Long) = "player/$itemId?startMs=$startMs"
+    fun player(itemId: String, startMs: Long, audioTrack: Int, subtitleTrackId: Long?) =
+        "player/$itemId?startMs=$startMs&audioTrack=$audioTrack&subtitleTrack=${subtitleTrackId ?: -1}"
 }
 
 @Composable
 fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
     val navController: NavHostController = rememberNavController()
     val catalogRepository = remember { CatalogRepository() }
+    val coroutineScope = rememberCoroutineScope()
     val start = when {
         app.serverConfigStore.baseUrl == null -> Routes.SETUP
         !app.tokenStore.hasTokens -> Routes.LOGIN
         else -> Routes.HOME
+    }
+    // A 401 that survived TokenAuthenticator's own refresh attempt means
+    // the refresh token is gone too — no request will succeed until the
+    // user signs in again. Tokens are usually already cleared by then
+    // (TokenAuthenticator does it on a failed refresh), but clear here
+    // too so a bare invalid-access-token-with-no-refresh-token case
+    // (never hits that refresh path at all) is covered as well.
+    val onSessionExpired: () -> Unit = {
+        coroutineScope.launch { app.tokenStore.clear() }
+        navController.navigate(Routes.LOGIN) { popUpTo(0) { inclusive = true } }
     }
 
     NavHost(navController = navController, startDestination = start, modifier = modifier) {
         composable(Routes.SETUP) {
             ServerSetupScreen(
                 serverConfigStore = app.serverConfigStore,
+                tokenStore = app.tokenStore,
                 onReady = {
                     val dest = if (app.tokenStore.hasTokens) Routes.HOME else Routes.LOGIN
                     navController.navigate(dest) { popUpTo(Routes.SETUP) { inclusive = true } }
@@ -56,9 +77,38 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
             )
         }
         composable(Routes.HOME) {
-            MainScreen(
+            HomeScreen(
                 repo = catalogRepository,
                 onOpenItem = { itemId -> navController.navigate(Routes.detail(itemId)) },
+                onOpenLibrary = { id, name -> navController.navigate(Routes.library(id, name)) },
+                onSearch = { navController.navigate(Routes.SEARCH) },
+                onSessionExpired = onSessionExpired,
+            )
+        }
+        composable(Routes.SEARCH) {
+            SearchScreen(
+                repo = catalogRepository,
+                onOpenItem = { itemId -> navController.navigate(Routes.detail(itemId)) },
+                onBack = { navController.popBackStack() },
+                onSessionExpired = onSessionExpired,
+            )
+        }
+        composable(
+            Routes.LIBRARY,
+            arguments = listOf(
+                navArgument("libraryId") { type = NavType.StringType },
+                navArgument("name") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) { backStackEntry ->
+            val libraryId = backStackEntry.arguments?.getString("libraryId") ?: return@composable
+            val name = backStackEntry.arguments?.getString("name").orEmpty()
+            LibraryScreen(
+                libraryId = libraryId,
+                libraryName = name,
+                repo = catalogRepository,
+                onOpenItem = { itemId -> navController.navigate(Routes.detail(itemId)) },
+                onBack = { navController.popBackStack() },
+                onSessionExpired = onSessionExpired,
             )
         }
         composable(
@@ -70,7 +120,11 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
                 itemId = itemId,
                 repo = catalogRepository,
                 onOpenItem = { childId -> navController.navigate(Routes.detail(childId)) },
-                onPlay = { playId, startMs -> navController.navigate(Routes.player(playId, startMs)) },
+                onPlay = { playId, startMs, audioTrack, subtitleTrackId ->
+                    navController.navigate(Routes.player(playId, startMs, audioTrack, subtitleTrackId))
+                },
+                onBack = { navController.popBackStack() },
+                onSessionExpired = onSessionExpired,
             )
         }
         composable(
@@ -78,13 +132,19 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
             arguments = listOf(
                 navArgument("itemId") { type = NavType.StringType },
                 navArgument("startMs") { type = NavType.LongType; defaultValue = 0L },
+                navArgument("audioTrack") { type = NavType.IntType; defaultValue = 0 },
+                navArgument("subtitleTrack") { type = NavType.LongType; defaultValue = -1L },
             ),
         ) { backStackEntry ->
             val itemId = backStackEntry.arguments?.getString("itemId") ?: return@composable
             val startMs = backStackEntry.arguments?.getLong("startMs") ?: 0L
+            val audioTrack = backStackEntry.arguments?.getInt("audioTrack") ?: 0
+            val subtitleTrack = backStackEntry.arguments?.getLong("subtitleTrack") ?: -1L
             PlayerScreen(
                 itemId = itemId,
                 startMs = startMs,
+                initialAudioTrack = audioTrack,
+                initialSubtitleTrackId = subtitleTrack.takeIf { it >= 0 },
                 onClose = { navController.popBackStack() },
             )
         }

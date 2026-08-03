@@ -25,10 +25,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -61,6 +64,7 @@ import androidx.media3.ui.DefaultTrackNameProvider
 import androidx.media3.ui.PlayerView
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
+import com.kolktech.kahawai.data.network.dto.displayLabel
 import com.kolktech.kahawai.data.repository.PlaybackRepository
 import com.kolktech.kahawai.ui.player.subtitle.AssSubtitleOverlay
 import com.kolktech.kahawai.ui.player.subtitle.ImageSubtitleOverlay
@@ -88,33 +92,37 @@ fun PlayerScreen(
     itemId: String,
     startMs: Long,
     onClose: () -> Unit,
+    initialAudioTrack: Int = 0,
+    initialSubtitleTrackId: Long? = null,
 ) {
     val context = LocalContext.current
     val application = context.applicationContext as Application
     val repo = remember { PlaybackRepository() }
     val viewModel: PlayerViewModel = viewModel(
         key = itemId,
-        factory = viewModelFactory { initializer { PlayerViewModel(application, repo, itemId, startMs) } },
+        factory = viewModelFactory {
+            initializer { PlayerViewModel(application, repo, itemId, startMs, initialAudioTrack, initialSubtitleTrackId) }
+        },
     )
     val state by viewModel.state.collectAsState()
 
     BackHandler(onBack = onClose)
 
-    // True fullscreen for the whole player screen: hide the status/nav
-    // bars for as long as this screen is on-screen, restore them on the
-    // way out. The root NavHost's safeDrawingPadding() shrinks to match
-    // automatically once the bars report zero inset, so no other screen
+    // True fullscreen for the whole player screen. The status bar is
+    // already hidden app-wide (MainActivity.hideStatusBar), so only the
+    // navigation bar needs taking away here — and, crucially, only the
+    // navigation bar may be restored on the way out, or leaving the
+    // player would bring the status bar back for the rest of the app.
+    // The root NavHost's safeDrawingPadding() shrinks to match
+    // automatically once the bar reports zero inset, so no other screen
     // needs to know about this.
     val view = LocalView.current
     DisposableEffect(view) {
         val window = view.context.findActivity()?.window
         val controller = window?.let { WindowInsetsControllerCompat(it, view) }
-        val previousBehavior = controller?.systemBarsBehavior
-        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        controller?.hide(WindowInsetsCompat.Type.systemBars())
+        controller?.hide(WindowInsetsCompat.Type.navigationBars())
         onDispose {
-            controller?.show(WindowInsetsCompat.Type.systemBars())
-            if (previousBehavior != null) controller.systemBarsBehavior = previousBehavior
+            controller?.show(WindowInsetsCompat.Type.navigationBars())
         }
     }
 
@@ -190,6 +198,18 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     val selectedSubtitle by viewModel.selectedSubtitleTrack.collectAsState()
     val subtitleSession by viewModel.subtitleSession.collectAsState()
+    val transientError by viewModel.transientError.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Recoverable failures (failed seek, failed subtitle switch) — the
+    // stream is still playing, so they get a snackbar here rather than
+    // the terminal PlayerState.Error screen.
+    LaunchedEffect(transientError) {
+        transientError?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.clearTransientError()
+        }
+    }
     // Ass/Overlay delivery need their own font/session-tap fetches;
     // PlaybackRepository holds no state, so a fresh instance here (rather
     // than threading the one PlayerScreen built for the ViewModel) keeps
@@ -260,9 +280,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             trackForItem[itemId] = null
             itemId++
             tracks.forEach { track ->
-                val label = listOfNotNull(track.language, track.label).joinToString(" – ").ifBlank { track.format.uppercase() }
-                val entry = if (track.note.isNotBlank()) "$label (${track.note})" else label
-                val menuItem = menu.add(0, itemId, itemId, entry)
+                val menuItem = menu.add(0, itemId, itemId, track.displayLabel())
                 // Burn restarts the session with a forced video encode and
                 // "none" can't be served at all — offer them but don't
                 // pretend they're a free client-side switch like the rest.
@@ -341,10 +359,14 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                     return true
                 }
 
+                // PlayerView.performClick() toggles controller visibility
+                // itself; routing the tap through it (rather than calling
+                // show/hideController by hand) keeps touch and
+                // accessibility-service activation on the same code path —
+                // a TalkBack double-tap fires performClick() directly and
+                // gets identical behavior.
                 override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                    playerView?.let { pv ->
-                        if (pv.isControllerFullyVisible) pv.hideController() else pv.showController()
-                    }
+                    playerView?.performClick()
                     return true
                 }
 
@@ -380,6 +402,14 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                 (LayoutInflater.from(ctx).inflate(R.layout.kw_player_view, null) as PlayerView).apply {
                     player = viewModel.player
                     useController = true
+                    // PlayerView's buffering spinner (exo_buffering) exists
+                    // in its layout but is off by default — a seek-restart
+                    // can legitimately take several seconds (the hub tears
+                    // down and restarts its whole remux pipeline at the new
+                    // position) with nothing but a black frame on screen to
+                    // show for it otherwise, indistinguishable from actually
+                    // being stuck.
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
                     // Controls (including our back button, which mirrors
                     // this same visibility) start hidden and only appear
                     // once the viewer taps - not automatically whenever
@@ -387,6 +417,10 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                     controllerAutoShow = false
                     hideController()
                     resizeMode = RESIZE_MODES[resizeModeIndex].first
+                    // Taps reach performClick via the gesture detector's
+                    // onSingleTapConfirmed (see above), satisfying the
+                    // click-path contract this lint check is about.
+                    @Suppress("ClickableViewAccessibility")
                     setOnTouchListener { _, event -> gestureDetector.onTouchEvent(event); true }
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
@@ -468,5 +502,10 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                 )
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
+        )
     }
 }

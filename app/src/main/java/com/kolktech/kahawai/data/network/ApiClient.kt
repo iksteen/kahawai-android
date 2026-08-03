@@ -48,14 +48,34 @@ object ApiClient {
 
     fun plainApiService(): ApiService = plainRetrofit().create(ApiService::class.java)
 
+    /// One-off service against a CANDIDATE hub URL during setup — lets the
+    /// reachability check run before the URL is committed to
+    /// [ServerConfigStore], so a typo'd address never becomes the stored
+    /// base URL. Not cached: setup is a one-shot flow.
+    fun probeApiService(candidateBaseUrl: String): ApiService =
+        buildRetrofit(plainClient(), normalize(candidateBaseUrl)).create(ApiService::class.java)
+
     fun apiService(): ApiService = authRetrofit().create(ApiService::class.java)
 
     fun authenticatedOkHttpClient(): OkHttpClient = authClient()
 
-    fun baseUrl(): String {
-        val url = serverConfigStore.baseUrl ?: error("hub server not configured yet")
-        return if (url.endsWith("/")) url else "$url/"
-    }
+    /// Same auth/refresh pipeline as [authenticatedOkHttpClient] (built via
+    /// `newBuilder()`, so it's cheap and stays in sync), but for ExoPlayer's
+    /// OkHttpDataSource rather than Retrofit: reading an HLS segment can
+    /// stall well past a normal API call's 10s if the hub's transcode
+    /// pipeline is still producing it, and OkHttp's default read/write
+    /// timeout (10s, same as the connect timeout set below) would surface
+    /// that stall to ExoPlayer as a generic source error indistinguishable
+    /// from an actual failure.
+    fun streamingOkHttpClient(): OkHttpClient = authClient().newBuilder()
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    fun baseUrl(): String =
+        normalize(serverConfigStore.baseUrl ?: error("hub server not configured yet"))
+
+    private fun normalize(url: String): String = if (url.endsWith("/")) url else "$url/"
 
     private fun loggingInterceptor() = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BASIC
@@ -80,14 +100,14 @@ object ApiClient {
     }
 
     private fun plainRetrofit(): Retrofit =
-        plainRetrofit ?: buildRetrofit(plainClient()).also { plainRetrofit = it }
+        plainRetrofit ?: buildRetrofit(plainClient(), baseUrl()).also { plainRetrofit = it }
 
     private fun authRetrofit(): Retrofit =
-        authRetrofit ?: buildRetrofit(authClient()).also { authRetrofit = it }
+        authRetrofit ?: buildRetrofit(authClient(), baseUrl()).also { authRetrofit = it }
 
-    private fun buildRetrofit(client: OkHttpClient): Retrofit =
+    private fun buildRetrofit(client: OkHttpClient, baseUrl: String): Retrofit =
         Retrofit.Builder()
-            .baseUrl(baseUrl())
+            .baseUrl(baseUrl)
             .client(client)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()

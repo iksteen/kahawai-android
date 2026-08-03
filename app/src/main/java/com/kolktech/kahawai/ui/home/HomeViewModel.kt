@@ -10,14 +10,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.network.dto.LibrarySummary
+import com.kolktech.kahawai.data.network.isAuthError
 import com.kolktech.kahawai.data.network.readableMessage
 import com.kolktech.kahawai.data.repository.CatalogRepository
 
-data class LibraryRow(val library: LibrarySummary, val items: List<Item>)
+data class LibraryRow(val library: LibrarySummary, val items: List<Item>, val total: Int)
 
 sealed interface HomeState {
     data object Loading : HomeState
-    data class Error(val message: String) : HomeState
+    data class Error(val message: String, val isAuthError: Boolean = false) : HomeState
     data class Loaded(val rows: List<LibraryRow>) : HomeState
 }
 
@@ -41,17 +42,15 @@ class HomeViewModel(private val repo: CatalogRepository) : ViewModel() {
                     libraries
                         .map { library ->
                             async {
-                                LibraryRow(
-                                    library,
-                                    repo.items(library = library.id, sort = "-added", limit = ROW_SIZE).items,
-                                )
+                                val response = repo.items(library = library.id, sort = "-added", limit = ROW_SIZE)
+                                LibraryRow(library, response.items, response.total)
                             }
                         }
                         .awaitAll()
                 }
                 _state.value = HomeState.Loaded(rows.filter { it.items.isNotEmpty() })
             } catch (e: Exception) {
-                _state.value = HomeState.Error(e.readableMessage())
+                _state.value = HomeState.Error(e.readableMessage(), e.isAuthError())
             }
         }
     }

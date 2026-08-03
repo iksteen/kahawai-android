@@ -11,13 +11,14 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import com.kolktech.kahawai.data.network.dto.Item
+import com.kolktech.kahawai.data.network.isAuthError
 import com.kolktech.kahawai.data.network.readableMessage
 import com.kolktech.kahawai.data.repository.CatalogRepository
 
 sealed interface SearchState {
     data object Idle : SearchState
     data object Loading : SearchState
-    data class Error(val message: String) : SearchState
+    data class Error(val message: String, val isAuthError: Boolean = false) : SearchState
     data class Loaded(val items: List<Item>, val total: Int) : SearchState
 }
 
@@ -37,23 +38,32 @@ class SearchViewModel(private val repo: CatalogRepository) : ViewModel() {
             _query
                 .debounce(DEBOUNCE_MS)
                 .distinctUntilChanged()
-                .collectLatest { q ->
-                    if (q.isBlank()) {
-                        _state.value = SearchState.Idle
-                        return@collectLatest
-                    }
-                    _state.value = SearchState.Loading
-                    try {
-                        val result = repo.items(q = q, limit = RESULT_LIMIT)
-                        _state.value = SearchState.Loaded(result.items, result.total)
-                    } catch (e: Exception) {
-                        _state.value = SearchState.Error(e.readableMessage())
-                    }
-                }
+                .collectLatest { q -> search(q) }
+        }
+    }
+
+    private suspend fun search(q: String) {
+        if (q.isBlank()) {
+            _state.value = SearchState.Idle
+            return
+        }
+        _state.value = SearchState.Loading
+        try {
+            val result = repo.items(q = q, limit = RESULT_LIMIT)
+            _state.value = SearchState.Loaded(result.items, result.total)
+        } catch (e: Exception) {
+            _state.value = SearchState.Error(e.readableMessage(), e.isAuthError())
         }
     }
 
     fun onQueryChange(q: String) {
         _query.value = q
+    }
+
+    /// The debounced flow's `distinctUntilChanged` won't re-run the same
+    /// query, so a retry after a failure re-issues it directly instead of
+    /// going back through the query flow.
+    fun retry() {
+        viewModelScope.launch { search(_query.value) }
     }
 }
