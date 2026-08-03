@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Copy of media3-ui's exo_player_control_view.xml (1.10.0) with two extra
-  buttons spliced into exo_basic_controls: exo_audio_track next to the CC
-  button, and exo_resize_mode next to the settings gear. Media3 doesn't
+  Copy of media3-ui's exo_player_control_view.xml (1.10.0) with the center
+  controls block (prev/rewind/play/ffwd/next) removed and small
+  prev/play-pause/next buttons placed at the start of the bottom bar
+  instead, before the time display. Audio track selection lives in the
+  settings gear menu (see PlayerScreen's showSettingsMenu), not as its own
+  bottom-bar button — portrait screens don't have the width. Media3 doesn't
   expose a public hook to add entries into its own controls row, so
   app:controller_layout_id (pointing here) is the officially documented way
   to customize it; if media3-ui's control layout changes in a future
@@ -23,25 +26,52 @@
       android:background="@color/exo_bottom_bar_background"
       android:layoutDirection="ltr">
 
-    <LinearLayout android:id="@id/exo_time"
+    <LinearLayout android:id="@+id/kw_bottom_start_controls"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:paddingStart="@dimen/exo_styled_bottom_bar_time_padding"
-        android:paddingEnd="@dimen/exo_styled_bottom_bar_time_padding"
-        android:paddingLeft="@dimen/exo_styled_bottom_bar_time_padding"
-        android:paddingRight="@dimen/exo_styled_bottom_bar_time_padding"
         android:layout_gravity="center_vertical|start"
-        android:layoutDirection="ltr"
-        android:importantForAccessibility="noHideDescendants">
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layoutDirection="ltr">
 
-      <TextView android:id="@id/exo_position"
-          style="@style/ExoStyledControls.TimeText.Position"/>
+      <ImageButton android:id="@id/exo_prev"
+          style="@style/ExoStyledControls.Button.Bottom"
+          android:src="@drawable/exo_styled_controls_previous"
+          android:scaleType="fitCenter"
+          android:contentDescription="@string/exo_controls_previous_description"/>
 
-      <TextView
-          style="@style/ExoStyledControls.TimeText.Separator"/>
+      <ImageButton android:id="@id/exo_play_pause"
+          style="@style/ExoStyledControls.Button.Bottom"
+          android:src="@drawable/exo_styled_controls_play"
+          android:scaleType="fitCenter"
+          android:contentDescription="@string/exo_controls_play_description"/>
 
-      <TextView android:id="@id/exo_duration"
-          style="@style/ExoStyledControls.TimeText.Duration"/>
+      <ImageButton android:id="@id/exo_next"
+          style="@style/ExoStyledControls.Button.Bottom"
+          android:src="@drawable/exo_styled_controls_next"
+          android:scaleType="fitCenter"
+          android:contentDescription="@string/exo_controls_next_description"/>
+
+      <LinearLayout android:id="@id/exo_time"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:paddingStart="@dimen/exo_styled_bottom_bar_time_padding"
+          android:paddingEnd="@dimen/exo_styled_bottom_bar_time_padding"
+          android:paddingLeft="@dimen/exo_styled_bottom_bar_time_padding"
+          android:paddingRight="@dimen/exo_styled_bottom_bar_time_padding"
+          android:layoutDirection="ltr"
+          android:importantForAccessibility="noHideDescendants">
+
+        <TextView android:id="@id/exo_position"
+            style="@style/ExoStyledControls.TimeText.Position"/>
+
+        <TextView
+            style="@style/ExoStyledControls.TimeText.Separator"/>
+
+        <TextView android:id="@id/exo_duration"
+            style="@style/ExoStyledControls.TimeText.Duration"/>
+
+      </LinearLayout>
 
     </LinearLayout>
 
@@ -62,9 +92,6 @@
 
       <ImageButton android:id="@id/exo_subtitle"
           style="@style/ExoStyledControls.Button.Bottom.CC"/>
-
-      <ImageButton android:id="@+id/exo_audio_track"
-          style="@style/ExoStyledControls.Button.Bottom.AudioTrack"/>
 
       <ImageButton android:id="@id/exo_settings"
           style="@style/ExoStyledControls.Button.Bottom.Settings"/>
@@ -114,32 +141,6 @@
 
     <ImageButton android:id="@id/exo_minimal_fullscreen"
         style="@style/ExoStyledControls.Button.Bottom.FullScreen"/>
-
-  </LinearLayout>
-
-  <LinearLayout
-      android:id="@id/exo_center_controls"
-      android:layout_width="wrap_content"
-      android:layout_height="wrap_content"
-      android:layout_gravity="center"
-      android:background="@android:color/transparent"
-      android:gravity="center"
-      android:padding="@dimen/exo_styled_controls_padding"
-      android:clipToPadding="false"
-      android:layoutDirection="ltr">
-
-    <ImageButton android:id="@id/exo_prev"
-        style="@style/ExoStyledControls.Button.Center.Previous"/>
-
-    <include layout="@layout/exo_player_control_rewind_button" />
-
-    <ImageButton android:id="@id/exo_play_pause"
-        style="@style/ExoStyledControls.Button.Center.PlayPause"/>
-
-    <include layout="@layout/exo_player_control_ffwd_button" />
-
-    <ImageButton android:id="@id/exo_next"
-        style="@style/ExoStyledControls.Button.Center.Next"/>
 
   </LinearLayout>
 

@@ -9,7 +9,9 @@ import android.provider.Settings
 import android.view.GestureDetector
 import android.view.LayoutInflater
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.ImageButton
 import android.widget.PopupMenu
 import androidx.activity.compose.BackHandler
@@ -71,6 +73,7 @@ import com.kolktech.kahawai.ui.player.subtitle.ImageSubtitleOverlay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private val RESIZE_MODES = listOf(
@@ -165,9 +168,44 @@ fun PlayerScreen(
 private sealed interface GestureIndicator {
     data class Brightness(val value: Float) : GestureIndicator
     data class Volume(val value: Float) : GestureIndicator
-    data class Seek(val forward: Boolean) : GestureIndicator
+    data class Seek(val forward: Boolean, val seconds: Float) : GestureIndicator
     data class Resize(val label: String) : GestureIndicator
 }
+
+private enum class DragMode { NONE, BRIGHTNESS, VOLUME }
+
+/// Mutable gesture bookkeeping shared between the tap/scroll detector,
+/// the pinch detector and the raw touch listener. Lives in a plain class
+/// (remembered once) rather than Compose state — nothing here drives
+/// recomposition, it only sequences events within a single gesture.
+private class TouchState {
+    var dragMode = DragMode.NONE
+    var pinchActive = false
+    var pinchScale = 1f
+
+    // Double-tap-to-seek chain: the first double tap seeks 5s, every
+    // further quick tap grows the same chain by 2.5s (2 taps = 5s,
+    // 6 taps = 15s). Targets are computed from the position captured at
+    // chain start, not currentPosition, because each hub seek is an async
+    // round trip that supersedes the previous one — reading
+    // currentPosition mid-chain would see a position no tap has landed
+    // on yet.
+    var seekChainMs = 0L
+    var seekChainBasisMs = 0L
+    var seekForward = true
+    var lastSeekTapTime = 0L
+
+    var lastTapUpTime = 0L
+    var pendingControllerToggle: Job? = null
+}
+
+private const val SEEK_FIRST_TAP_MS = 5_000L
+private const val SEEK_EXTRA_TAP_MS = 2_500L
+
+/// How long after the last seek-tap another tap still extends the chain
+/// (also how long the seek indicator stays up, so the indicator being
+/// visible == "another tap will add to the seek").
+private const val SEEK_CHAIN_WINDOW_MS = 800L
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -216,13 +254,18 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     // this composable self-contained.
     val subtitleRepo = remember { PlaybackRepository() }
 
-    fun flash(next: GestureIndicator) {
+    fun flash(next: GestureIndicator, durationMs: Long = 700) {
         indicator = next
         hideJob?.cancel()
         hideJob = scope.launch {
-            delay(700)
+            delay(durationMs)
             indicator = null
         }
+    }
+
+    fun applyResize(index: Int) {
+        resizeModeIndex = index
+        playerView?.resizeMode = RESIZE_MODES[index].first
     }
 
     fun applyBrightness(value: Float) {
@@ -238,14 +281,19 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     }
 
     // Anchored popup, same style as the resize/speed menus below, instead
-    // of TrackSelectionDialogBuilder's modal AlertDialog.
+    // of TrackSelectionDialogBuilder's modal AlertDialog. Reached through
+    // the settings gear menu — portrait screens don't have bottom-bar
+    // width for a dedicated audio button.
     fun showAudioTrackMenu(menuContext: Context, anchor: View) {
         val groups = viewModel.player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
         if (groups.isEmpty()) return
         val nameProvider = DefaultTrackNameProvider(menuContext.resources)
+        val overrides = viewModel.player.trackSelectionParameters.overrides
+        val hasAudioOverride = overrides.values.any { it.type == C.TRACK_TYPE_AUDIO }
         PopupMenu(menuContext, anchor).apply {
             val selectionForItem = mutableMapOf<Int, Pair<TrackGroup, Int>?>()
             var itemId = 0
+            var checkedItemId = if (hasAudioOverride) -1 else 0
             menu.add(0, itemId, itemId, "Default")
             selectionForItem[itemId] = null
             itemId++
@@ -254,9 +302,14 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                     if (!group.isTrackSupported(trackIndex)) continue
                     menu.add(0, itemId, itemId, nameProvider.getTrackName(group.getTrackFormat(trackIndex)))
                     selectionForItem[itemId] = group.mediaTrackGroup to trackIndex
+                    if (overrides[group.mediaTrackGroup]?.trackIndices?.contains(trackIndex) == true) {
+                        checkedItemId = itemId
+                    }
                     itemId++
                 }
             }
+            menu.setGroupCheckable(0, true, true)
+            menu.findItem(checkedItemId)?.isChecked = true
             setOnMenuItemClickListener { item ->
                 val selection = selectionForItem[item.itemId]
                 val params = viewModel.player.trackSelectionParameters.buildUpon()
@@ -273,9 +326,11 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     // becomes an ExoPlayer text track at all, only Text delivery does.
     fun showSubtitleTrackMenu(menuContext: Context, anchor: View) {
         val tracks = viewModel.subtitleTracks.value
+        val selected = viewModel.selectedSubtitleTrack.value
         PopupMenu(menuContext, anchor).apply {
             val trackForItem = mutableMapOf<Int, SubtitleTrack?>()
             var itemId = 0
+            var checkedItemId = if (selected == null) 0 else -1
             menu.add(0, itemId, itemId, "Off")
             trackForItem[itemId] = null
             itemId++
@@ -285,9 +340,12 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                 // "none" can't be served at all — offer them but don't
                 // pretend they're a free client-side switch like the rest.
                 menuItem.isEnabled = track.delivery != "none"
+                if (track.id == selected?.id) checkedItemId = itemId
                 trackForItem[itemId] = track
                 itemId++
             }
+            menu.setGroupCheckable(0, true, true)
+            menu.findItem(checkedItemId)?.isChecked = true
             setOnMenuItemClickListener { item ->
                 if (trackForItem.containsKey(item.itemId)) {
                     viewModel.selectSubtitleTrack(trackForItem[item.itemId])
@@ -297,13 +355,14 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
         }.show()
     }
 
-    fun showResizeMenu(menuContext: Context, anchor: View, target: PlayerView) {
+    fun showResizeMenu(menuContext: Context, anchor: View) {
         PopupMenu(menuContext, anchor).apply {
             RESIZE_MODES.forEachIndexed { index, (_, label) -> menu.add(0, index, index, label) }
+            menu.setGroupCheckable(0, true, true)
+            menu.findItem(resizeModeIndex)?.isChecked = true
             setOnMenuItemClickListener { item ->
-                resizeModeIndex = item.itemId
-                target.resizeMode = RESIZE_MODES[resizeModeIndex].first
-                flash(GestureIndicator.Resize(RESIZE_MODES[resizeModeIndex].second))
+                applyResize(item.itemId)
+                flash(GestureIndicator.Resize(RESIZE_MODES[item.itemId].second))
                 true
             }
         }.show()
@@ -312,6 +371,10 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     fun showSpeedMenu(menuContext: Context, anchor: View) {
         PopupMenu(menuContext, anchor).apply {
             PLAYBACK_SPEEDS.forEachIndexed { index, speed -> menu.add(0, index, index, "${speed}x") }
+            menu.setGroupCheckable(0, true, true)
+            PLAYBACK_SPEEDS.indexOfFirst { it == viewModel.player.playbackParameters.speed }
+                .takeIf { it >= 0 }
+                ?.let { menu.findItem(it)?.isChecked = true }
             setOnMenuItemClickListener { item ->
                 viewModel.player.setPlaybackSpeed(PLAYBACK_SPEEDS[item.itemId])
                 true
@@ -323,19 +386,56 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     // private, non-extensible adapter inside PlayerControlView, so there's
     // no public way to add a "video aspect" row into it. We take over the
     // gear button's click entirely and show our own two-level menu instead,
-    // covering what the native one offered (speed) plus resize mode.
-    fun showSettingsMenu(menuContext: Context, anchor: View, target: PlayerView) {
+    // covering what the native one offered (speed / audio track) plus
+    // resize mode. Each row shows its current value so the state is
+    // visible without opening the submenu.
+    fun showSettingsMenu(menuContext: Context, anchor: View) {
+        val speed = viewModel.player.playbackParameters.speed
+        val nameProvider = DefaultTrackNameProvider(menuContext.resources)
+        val audioGroups = viewModel.player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+        val currentAudio = audioGroups.firstNotNullOfOrNull { group ->
+            (0 until group.length).firstOrNull { group.isTrackSelected(it) }
+                ?.let { nameProvider.getTrackName(group.getTrackFormat(it)) }
+        }
         PopupMenu(menuContext, anchor).apply {
             menu.add(0, 0, 0, "Video: ${RESIZE_MODES[resizeModeIndex].second}")
-            menu.add(0, 1, 1, "Playback speed")
+            menu.add(0, 1, 1, "Speed: ${speed}x")
+            if (audioGroups.isNotEmpty()) menu.add(0, 2, 2, "Audio: ${currentAudio ?: "Default"}")
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
-                    0 -> showResizeMenu(menuContext, anchor, target)
+                    0 -> showResizeMenu(menuContext, anchor)
                     1 -> showSpeedMenu(menuContext, anchor)
+                    2 -> showAudioTrackMenu(menuContext, anchor)
                 }
                 true
             }
         }.show()
+    }
+
+    val touchState = remember { TouchState() }
+    val doubleTapTimeoutMs = remember { ViewConfiguration.getDoubleTapTimeout().toLong() }
+    val density = context.resources.displayMetrics.density
+    // Vertical travel required before a swipe starts adjusting anything —
+    // well above touch slop, so the incidental jitter of a tap or the
+    // start of a system back/home gesture never registers as a swipe.
+    val dragStartThresholdPx = remember { 36 * density }
+    // Dead zone along every screen edge: left/right are Android's
+    // gesture-navigation back zones, bottom is the home gesture. Swipes
+    // beginning there belong to the system, not to brightness/volume.
+    val edgeExclusionPx = remember { 32 * density }
+
+    // Seeks issued per tap are safe to fire eagerly: PlayerViewModel's
+    // handleSeek cancels the in-flight hub round trip when a newer seek
+    // supersedes it, so only the final chain target actually lands.
+    fun performChainSeek(state: TouchState) {
+        val duration = viewModel.player.duration.takeIf { it != C.TIME_UNSET }
+        val target = if (state.seekForward) {
+            (state.seekChainBasisMs + state.seekChainMs).let { t -> duration?.let { minOf(t, it) } ?: t }
+        } else {
+            (state.seekChainBasisMs - state.seekChainMs).coerceAtLeast(0)
+        }
+        viewModel.player.seekTo(target)
+        flash(GestureIndicator.Seek(state.seekForward, state.seekChainMs / 1000f), durationMs = SEEK_CHAIN_WINDOW_MS)
     }
 
     // A single GestureDetector, built once, attached directly to the
@@ -347,52 +447,148 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     // already consume, so those buttons keep working. Built once (not
     // per-recomposition) so an in-progress drag doesn't get handed to a
     // brand new detector mid-gesture.
+    //
+    // Double taps are detected manually from onSingleTapUp timing rather
+    // than onDoubleTap: once a seek chain is running, every further tap
+    // must extend it immediately, but GestureDetector would only report
+    // every second tap (it pairs taps back into fresh double-tap
+    // gestures) and would delay them through its own timeout.
     val gestureDetector = remember {
         GestureDetector(
             context,
             object : GestureDetector.SimpleOnGestureListener() {
-                private var startedOnLeftSide = true
-
                 override fun onDown(e: MotionEvent): Boolean {
-                    val width = playerView?.width ?: return true
-                    startedOnLeftSide = e.x < width / 2f
+                    touchState.dragMode = DragMode.NONE
+                    touchState.pinchActive = false
                     return true
                 }
 
-                // PlayerView.performClick() toggles controller visibility
-                // itself; routing the tap through it (rather than calling
-                // show/hideController by hand) keeps touch and
-                // accessibility-service activation on the same code path —
-                // a TalkBack double-tap fires performClick() directly and
-                // gets identical behavior.
-                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                    playerView?.performClick()
-                    return true
-                }
+                override fun onSingleTapUp(e: MotionEvent): Boolean {
+                    val view = playerView ?: return true
+                    val now = e.eventTime
+                    val forward = e.x >= view.width / 2f
 
-                override fun onDoubleTap(e: MotionEvent): Boolean {
-                    if (startedOnLeftSide) {
-                        viewModel.player.seekBack()
-                        flash(GestureIndicator.Seek(forward = false))
-                    } else {
-                        viewModel.player.seekForward()
-                        flash(GestureIndicator.Seek(forward = true))
+                    // Tap while the seek indicator is still up: extend the
+                    // running chain (or flip it if the side changed).
+                    if (touchState.seekChainMs > 0 && now - touchState.lastSeekTapTime <= SEEK_CHAIN_WINDOW_MS) {
+                        if (forward != touchState.seekForward) {
+                            touchState.seekForward = forward
+                            touchState.seekChainMs = SEEK_FIRST_TAP_MS
+                            touchState.seekChainBasisMs = viewModel.player.currentPosition
+                        } else {
+                            touchState.seekChainMs += SEEK_EXTRA_TAP_MS
+                        }
+                        touchState.lastSeekTapTime = now
+                        performChainSeek(touchState)
+                        return true
+                    }
+                    touchState.seekChainMs = 0
+
+                    // Second tap in quick succession: start a seek chain.
+                    if (now - touchState.lastTapUpTime <= doubleTapTimeoutMs) {
+                        touchState.pendingControllerToggle?.cancel()
+                        touchState.pendingControllerToggle = null
+                        touchState.lastTapUpTime = 0
+                        touchState.seekForward = forward
+                        touchState.seekChainMs = SEEK_FIRST_TAP_MS
+                        touchState.seekChainBasisMs = viewModel.player.currentPosition
+                        touchState.lastSeekTapTime = now
+                        performChainSeek(touchState)
+                        return true
+                    }
+
+                    // Lone tap: toggle the controller, but only once the
+                    // double-tap window has passed without a second tap.
+                    // PlayerView.performClick() toggles controller
+                    // visibility itself; routing the tap through it keeps
+                    // touch and accessibility-service activation on the
+                    // same code path — a TalkBack double-tap fires
+                    // performClick() directly and gets identical behavior.
+                    touchState.lastTapUpTime = now
+                    touchState.pendingControllerToggle?.cancel()
+                    touchState.pendingControllerToggle = scope.launch {
+                        delay(doubleTapTimeoutMs)
+                        playerView?.performClick()
                     }
                     return true
                 }
 
                 override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
-                    val height = playerView?.height?.takeIf { it > 0 } ?: return true
+                    val view = playerView ?: return true
+                    val start = e1 ?: return true
+                    val height = view.height.takeIf { it > 0 } ?: return true
+                    if (touchState.pinchActive || e2.pointerCount > 1) return true
+
+                    if (touchState.dragMode == DragMode.NONE) {
+                        if (start.x < edgeExclusionPx || start.x > view.width - edgeExclusionPx ||
+                            start.y < edgeExclusionPx || start.y > height - edgeExclusionPx
+                        ) {
+                            return true
+                        }
+                        val totalDx = e2.x - start.x
+                        val totalDy = e2.y - start.y
+                        // Engage only once the finger has clearly committed
+                        // to a vertical swipe; anything shorter or more
+                        // horizontal is a tap wobble or a system gesture.
+                        if (abs(totalDy) < dragStartThresholdPx || abs(totalDy) < abs(totalDx)) return true
+                        touchState.dragMode = if (start.x < view.width / 2f) DragMode.BRIGHTNESS else DragMode.VOLUME
+                        return true
+                    }
+
                     val delta = distanceY / height
-                    if (startedOnLeftSide) {
-                        applyBrightness((brightness + delta).coerceIn(0f, 1f))
-                    } else {
-                        applyVolume((volume + delta).coerceIn(0f, 1f))
+                    when (touchState.dragMode) {
+                        DragMode.BRIGHTNESS -> applyBrightness((brightness + delta).coerceIn(0f, 1f))
+                        DragMode.VOLUME -> applyVolume((volume + delta).coerceIn(0f, 1f))
+                        DragMode.NONE -> {}
                     }
                     return true
                 }
             },
-        )
+        ).apply {
+            // SimpleOnGestureListener registers itself as an
+            // OnDoubleTapListener, and once GestureDetector classifies a
+            // second tap as a double tap it swallows that tap's
+            // onSingleTapUp — which would make the manual tap counting
+            // above miss every second tap. Unregistering turns the
+            // detector's own double-tap tracking off entirely so
+            // onSingleTapUp fires for every tap.
+            setOnDoubleTapListener(null)
+        }
+    }
+
+    // Pinch out anywhere on the video zooms it to fill the screen (crop),
+    // pinch in returns it to the normal fit. Runs alongside the tap/swipe
+    // detector; pinchActive keeps a finished pinch from being misread as
+    // a brightness/volume swipe for the rest of the gesture.
+    val scaleGestureDetector = remember {
+        ScaleGestureDetector(
+            context,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                    touchState.pinchActive = true
+                    touchState.pinchScale = 1f
+                    return true
+                }
+
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    touchState.pinchScale *= detector.scaleFactor
+                    if (touchState.pinchScale >= 1.2f && resizeModeIndex != 1) {
+                        applyResize(1)
+                        flash(GestureIndicator.Resize("Zoomed to fill"))
+                    } else if (touchState.pinchScale <= 0.8f && resizeModeIndex != 0) {
+                        applyResize(0)
+                        flash(GestureIndicator.Resize("Fit"))
+                    }
+                    return true
+                }
+            },
+        ).apply {
+            // Quick scale (double-tap-then-drag zoom) reuses exactly the
+            // tap rhythm the seek chain is built on — a double tap whose
+            // second tap drags slightly would start "scaling" and fight
+            // both the seek and the swipe gestures.
+            isQuickScaleEnabled = false
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -418,20 +614,21 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                     hideController()
                     resizeMode = RESIZE_MODES[resizeModeIndex].first
                     // Taps reach performClick via the gesture detector's
-                    // onSingleTapConfirmed (see above), satisfying the
+                    // onSingleTapUp (see above), satisfying the
                     // click-path contract this lint check is about.
                     @Suppress("ClickableViewAccessibility")
-                    setOnTouchListener { _, event -> gestureDetector.onTouchEvent(event); true }
+                    setOnTouchListener { _, event ->
+                        scaleGestureDetector.onTouchEvent(event)
+                        gestureDetector.onTouchEvent(event)
+                        true
+                    }
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
                             controllerVisible = visibility == View.VISIBLE
                         },
                     )
-                    findViewById<ImageButton>(R.id.exo_audio_track).setOnClickListener { anchor ->
-                        showAudioTrackMenu(ctx, anchor)
-                    }
                     findViewById<ImageButton>(androidx.media3.ui.R.id.exo_settings).setOnClickListener { anchor ->
-                        showSettingsMenu(ctx, anchor, this)
+                        showSettingsMenu(ctx, anchor)
                     }
                     findViewById<ImageButton>(androidx.media3.ui.R.id.exo_subtitle).setOnClickListener { anchor ->
                         showSubtitleTrackMenu(ctx, anchor)
@@ -487,7 +684,10 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             val label = when (current) {
                 is GestureIndicator.Brightness -> "Brightness ${(current.value * 100).roundToInt()}%"
                 is GestureIndicator.Volume -> "Volume ${(current.value * 100).roundToInt()}%"
-                is GestureIndicator.Seek -> if (current.forward) "Forward ⏩" else "⏪ Rewind"
+                is GestureIndicator.Seek -> {
+                    val secs = if (current.seconds % 1f == 0f) current.seconds.toInt().toString() else current.seconds.toString()
+                    if (current.forward) "${secs}s ⏩" else "⏪ ${secs}s"
+                }
                 is GestureIndicator.Resize -> current.label
             }
             Surface(
