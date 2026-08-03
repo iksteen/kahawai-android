@@ -29,11 +29,13 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,17 +61,20 @@ sealed interface PlayerState {
 /// out-of-band session streams (subs-{id}.ass / subs-{id}.jsonl):
 /// [streamBaseUrl] is [session.streamUrl] with the last path segment
 /// stripped, mirroring web/src/views/Player.tsx's `base`. [streamBaseUrl]
-/// itself doesn't change across a seek-restart within one session (only
-/// [offsetMs] does — see PlayerViewModel.attach), so [epoch] is bumped on
-/// every attach() to give overlay composables an explicit key to
-/// reconnect their stream on. [offsetMs] can ALSO change without an
-/// [epoch] bump: [PlayerViewModel.syncOrigin] corrects it in place once
-/// the hub reports the pipeline's true (keyframe-snapped) origin, and
-/// overlay composables are expected to read that correction live rather
-/// than wait for a reconnect.
+/// itself doesn't change across a seek-restart within one session, so
+/// [epoch] is bumped on every attach() to give overlay composables an
+/// explicit key to reconnect their stream on. Timing deliberately does
+/// NOT travel through here: overlays read the absolute video position
+/// straight off [PlayerViewModel.player], whose position overrides
+/// already fold in offsetMs — including [PlayerViewModel.syncOrigin]'s
+/// in-place correction — in every mode. (An earlier revision carried
+/// offsetMs in this class and had overlays add it to player position
+/// themselves; once the ForwardingPlayer's getCurrentPosition() started
+/// reporting absolute time for the seekbar fix, that added the offset
+/// TWICE, desyncing ass/overlay subtitles after every seek or mid-video
+/// resume.)
 data class SubtitleSession(
     val streamBaseUrl: String,
-    val offsetMs: Long,
     val epoch: Int,
 )
 
@@ -368,7 +373,15 @@ class PlayerViewModel(
     private var session: StartSessionResponse? = null
     private var offsetMs: Long = 0
     private var progressJob: Job? = null
+    private var seekJob: Job? = null
     private var subtitleEpoch: Int = 0
+
+    /// The offsetMs value baked into the current MediaItem's sideloaded
+    /// VTT configs as `shift_ms` (see textDeliverySubtitleConfigs). When
+    /// syncOrigin later corrects offsetMs, the baked shift is stale by
+    /// the keyframe-snap delta — rebakeTextSubtitleShiftIfNeeded()
+    /// compares against this to decide whether a re-prepare is owed.
+    private var attachedVttShiftMs: Long = 0
 
     private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
     val subtitleTracks: StateFlow<List<SubtitleTrack>> = _subtitleTracks
@@ -505,8 +518,25 @@ class PlayerViewModel(
                 // syncOrigin() below refines offsetMs once the true
                 // keyframe-snapped origin is known; it doesn't touch
                 // startPositionMs, which never needed correcting.
-                offsetMs = startMs
-                attach(session, startPositionMs = 0, requestedAbsMs = startMs)
+                //
+                // "direct" mode is the opposite arrangement: the file's
+                // native timeline IS absolute, so offsetMs must stay 0
+                // (offsetMs + currentPosition is how every absolute
+                // position is reconstructed — progress reports, the
+                // seek overrides, subtitle shift) and resuming partway
+                // is a real player seek to startMs, not a pipeline
+                // restart. The previous code applied the HLS recipe
+                // (offsetMs = startMs, startPositionMs = 0) to direct
+                // too, which both started resumed playback from the
+                // beginning AND reported/rendered everything shifted by
+                // startMs.
+                if (session.mode == "direct") {
+                    offsetMs = 0
+                    attach(session, startPositionMs = startMs, requestedAbsMs = startMs)
+                } else {
+                    offsetMs = startMs
+                    attach(session, startPositionMs = 0, requestedAbsMs = startMs)
+                }
                 _state.value = PlayerState.Ready
                 startProgressLoop()
             } catch (e: Exception) {
@@ -522,7 +552,21 @@ class PlayerViewModel(
             return
         }
         Log.d(TAG, "seek requested item=$itemId sessionId=${session.sessionId} targetMs=$targetMs currentOffsetMs=$offsetMs")
-        viewModelScope.launch {
+        // Seeks must not overlap: each one is pause -> hub round trip ->
+        // offsetMs/attach, and two in flight at once (rapid double-taps,
+        // repeated scrubber drags) race on whose response lands last —
+        // the loser's attach()/offsetMs can describe a pipeline position
+        // the hub isn't actually at anymore, desyncing subtitles and the
+        // seekbar until the next seek. Cancelling the previous seek
+        // aborts its in-flight HTTP call (suspend Retrofit), and joining
+        // it before issuing ours keeps hub-side execution in the same
+        // order as client-side attaches. CancellationException must
+        // propagate untouched: a superseded seek is being replaced, so
+        // its catch block must neither resume playback nor report an
+        // error on the newer seek's behalf.
+        val previousSeek = seekJob
+        seekJob = viewModelScope.launch {
+            previousSeek?.cancelAndJoin()
             try {
                 realPlayer.pause()
                 val result = repo.seek(session.sessionId, targetMs, subtitleTrack = _selectedSubtitleTrack.value?.id)
@@ -539,6 +583,8 @@ class PlayerViewModel(
                 offsetMs = targetMs
                 Log.d(TAG, "seek accepted by hub item=$itemId newPartBaseMs=${result.partBaseMs}")
                 attach(session, startPositionMs = 0, requestedAbsMs = targetMs)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 // The old stream is untouched (we only paused) — resume it
                 // where it was and let the user retry the seek.
@@ -573,9 +619,17 @@ class PlayerViewModel(
                     subtitleTrack = subtitleTrackId,
                 )
                 session = newSession
-                // See start()'s comment on offsetMs/startPositionMs.
-                offsetMs = positionMs
-                attach(newSession, startPositionMs = 0, requestedAbsMs = positionMs)
+                // See start()'s comment on offsetMs/startPositionMs —
+                // and un-picking a burn can legitimately come back as a
+                // "direct" session, so both arrangements are reachable
+                // here.
+                if (newSession.mode == "direct") {
+                    offsetMs = 0
+                    attach(newSession, startPositionMs = positionMs, requestedAbsMs = positionMs)
+                } else {
+                    offsetMs = positionMs
+                    attach(newSession, startPositionMs = 0, requestedAbsMs = positionMs)
+                }
                 if (oldSessionId != null && oldSessionId != newSession.sessionId) {
                     launch {
                         try {
@@ -596,7 +650,7 @@ class PlayerViewModel(
         }
     }
 
-    private fun attach(session: StartSessionResponse, startPositionMs: Long, requestedAbsMs: Long) {
+    private fun buildMediaItem(session: StartSessionResponse): MediaItem {
         val uri = ApiClient.baseUrl().trimEnd('/') + session.streamUrl
         // Util.inferContentTypeForUriAndMimeType only recognizes HLS via an
         // exact match on the literal "application/x-mpegURL" — the hub's
@@ -669,26 +723,31 @@ class PlayerViewModel(
                     .build(),
             )
         }
-        val mediaItem = mediaItemBuilder.build()
-        realPlayer.setMediaItem(mediaItem, startPositionMs)
+        return mediaItemBuilder.build()
+    }
+
+    private fun attach(session: StartSessionResponse, startPositionMs: Long, requestedAbsMs: Long) {
+        realPlayer.setMediaItem(buildMediaItem(session), startPositionMs)
         realPlayer.prepare()
         realPlayer.playWhenReady = true
+        attachedVttShiftMs = offsetMs
         // Track groups for the just-set MediaItem don't exist yet (they
         // load asynchronously) — the onTracksChanged listener in init{}
         // reapplies the pinned selection once they do. Nothing to do here
         // beyond that; a stale override from the PREVIOUS MediaItem can't
         // linger since setMediaItem/prepare drops it.
-        // uri's last path segment is the playlist/manifest file
-        // (master.m3u8 for remux/transcode); the session's out-of-band
-        // taps (subs-{id}.ass / subs-{id}.jsonl) live alongside it. epoch
-        // bumps on every attach() (initial + every seek-restart) so
-        // AssSubtitleOverlay/ImageSubtitleOverlay know to reconnect even
-        // though streamBaseUrl itself doesn't change within one session.
+        // The stream URL's last path segment is the playlist/manifest
+        // file (master.m3u8 for remux/transcode); the session's
+        // out-of-band taps (subs-{id}.ass / subs-{id}.jsonl) live
+        // alongside it. epoch bumps on every attach() (initial + every
+        // seek-restart) so AssSubtitleOverlay/ImageSubtitleOverlay know
+        // to reconnect even though streamBaseUrl itself doesn't change
+        // within one session.
         subtitleEpoch++
+        val uri = ApiClient.baseUrl().trimEnd('/') + session.streamUrl
         val streamBaseUrl = uri.substringBeforeLast('/') + "/"
         _subtitleSession.value = SubtitleSession(
             streamBaseUrl = streamBaseUrl,
-            offsetMs = offsetMs,
             epoch = subtitleEpoch,
         )
         // offsetMs (partBaseMs) is only correct for multi-part timeline
@@ -711,18 +770,22 @@ class PlayerViewModel(
     /// `start.pos` sidecar — mirrors web/src/views/Player.tsx's
     /// syncOrigin ("players align subtitles/seekbar to it", per the
     /// hub's own session_file comment). The mismatch this corrects is
-    /// exactly what shows up as ASS/overlay subtitles (read live off
-    /// [subtitleSession]) and the reported/seekbar position drifting out
-    /// of sync with the video specifically when resuming or seeking into
-    /// the middle of something — never when starting from the beginning.
+    /// exactly what shows up as subtitles and the reported/seekbar
+    /// position drifting out of sync with the video specifically when
+    /// resuming or seeking into the middle of something — never when
+    /// starting from the beginning.
     ///
-    /// The correction is applied to the SAME [SubtitleSession] instance
-    /// (no epoch bump): overlay composables must read [offsetMs] live
-    /// rather than capture it once, or they'd miss this. Text-delivery
-    /// VTT is a separate story — its shift_ms is baked into a sideloaded
-    /// MediaItem.SubtitleConfiguration at prepare() time, and correcting
-    /// it live would need a full re-prepare (a visible rebuffer) just to
-    /// fix subtitle timing, a worse trade than leaving it as-is.
+    /// The correction is a plain in-place [offsetMs] write (no epoch
+    /// bump, no [SubtitleSession] change): ass/overlay rendering and the
+    /// seekbar both read position through the ForwardingPlayer, whose
+    /// overrides fold in offsetMs at call time, so they pick it up on
+    /// their very next read. Text-delivery VTT is the one consumer that
+    /// CAN'T — its shift_ms is baked into a sideloaded
+    /// MediaItem.SubtitleConfiguration at prepare() time — so it's
+    /// handled by rebakeTextSubtitleShiftIfNeeded(): a position-
+    /// preserving re-prepare, paid only when a text track is actually
+    /// selected (at correction time, or later at pick time via
+    /// selectSubtitleTrack).
     ///
     /// [start.pos] may not exist yet the instant a fresh pipeline starts,
     /// so this retries a few times before giving up — same shape as the
@@ -781,8 +844,10 @@ class PlayerViewModel(
                         // session/a stale file, not a real keyframe snap.
                         if (subtitleEpoch == forEpoch && corrected != offsetMs && inBounds) {
                             offsetMs = corrected
-                            _subtitleSession.value = _subtitleSession.value?.copy(offsetMs = corrected)
                             Log.d(TAG, "syncOrigin applied epoch=$forEpoch offsetMs=$corrected")
+                            if (_selectedSubtitleTrack.value?.delivery == "text") {
+                                rebakeTextSubtitleShiftIfNeeded()
+                            }
                         }
                         return@launch
                     }
@@ -795,12 +860,39 @@ class PlayerViewModel(
         }
     }
 
+    /// Media3 offers no way to adjust a sideloaded subtitle's time shift
+    /// on a live MediaItem, so when [offsetMs] has moved past the value
+    /// baked into the current configs (syncOrigin's keyframe-snap
+    /// correction — typically a few seconds after any seek that didn't
+    /// land exactly on a keyframe), the only fix is re-preparing the same
+    /// stream with freshly-baked configs. That's a visible rebuffer, so
+    /// it's deliberately NOT done on every correction — only when a text
+    /// track is actually selected (callers gate on that), where the
+    /// alternative is subtitles permanently off by the snap delta.
+    /// Position is preserved: realPlayer.currentPosition is playlist-
+    /// local and the playlist itself is unchanged, so handing it back as
+    /// startPositionMs resumes in place.
+    private fun rebakeTextSubtitleShiftIfNeeded() {
+        val session = session ?: return
+        if (session.mode == "direct") return // shift is always 0 for direct
+        if (attachedVttShiftMs == offsetMs) return
+        Log.d(TAG, "rebaking VTT shift item=$itemId stale=$attachedVttShiftMs fresh=$offsetMs")
+        val resumeLocalMs = realPlayer.currentPosition
+        val wasPlaying = realPlayer.playWhenReady
+        realPlayer.setMediaItem(buildMediaItem(session), resumeLocalMs)
+        realPlayer.prepare()
+        realPlayer.playWhenReady = wasPlaying
+        attachedVttShiftMs = offsetMs
+    }
+
     /// Media3 can't attach a new [MediaItem.SubtitleConfiguration] to an
     /// already-prepared MediaItem, so every Text-delivery track is
     /// sideloaded here upfront; switching between them is then a
     /// TrackSelectionOverride (applySubtitleTrackSelectionOverride) with
     /// no re-prepare. `shift_ms` is recomputed every attach() call since
-    /// offsetMs changes on every seek-restart.
+    /// offsetMs changes on every seek-restart. For "direct" sessions
+    /// offsetMs is pinned to 0 (the native timeline is already absolute),
+    /// so the shift correctly evaluates to 0 there.
     private fun textDeliverySubtitleConfigs(): List<MediaItem.SubtitleConfiguration> =
         _subtitleTracks.value
             .filter { it.delivery == "text" }
@@ -853,7 +945,13 @@ class PlayerViewModel(
         } else {
             // Text delivery lives on tracks attached at the START of the
             // CURRENT MediaItem (realPlayer.currentTracks), so this doesn't
-            // need a fresh attach() — unlike the initial sideload list itself.
+            // need a fresh attach() — unlike the initial sideload list
+            // itself. One exception: if syncOrigin corrected offsetMs
+            // AFTER those tracks were baked, a text pick made now would
+            // render off by the snap delta — the rebake (a no-op when the
+            // baked shift is still current) settles that first; its
+            // re-prepare path applies the override via onTracksChanged.
+            if (track?.delivery == "text") rebakeTextSubtitleShiftIfNeeded()
             applySubtitleTrackSelectionOverride()
         }
     }

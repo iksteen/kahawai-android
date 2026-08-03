@@ -13,7 +13,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -25,14 +24,17 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.ui.player.SubtitleSession
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 
 private const val TAG = "ImageSubtitleOverlay"
 
@@ -107,46 +109,71 @@ fun ImageSubtitleOverlay(
     val sets = remember(subtitleSession.epoch, track.id) { mutableStateOf(emptyList<DisplaySet>()) }
     var currentSet by remember(subtitleSession.epoch, track.id) { mutableStateOf<DisplaySet?>(null) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
-    // subtitleSession is a plain parameter — the render loop below is a
-    // LaunchedEffect keyed on (epoch, track.id) only, so a coroutine
-    // launched from it would otherwise only ever see the offsetMs it
-    // captured at launch, missing any later correction from
-    // PlayerViewModel.syncOrigin (applied in place, without an epoch
-    // bump — see SubtitleSession's doc comment).
-    val currentSubtitleSession by rememberUpdatedState(subtitleSession)
-
     LaunchedEffect(subtitleSession.epoch, track.id) {
         val url = "${subtitleSession.streamBaseUrl}subs-${track.id}.jsonl"
         withContext(Dispatchers.IO) {
-            try {
-                val client = ApiClient.authenticatedOkHttpClient().newBuilder()
-                    // This is a long-lived, growing stream — must not time
-                    // out while idle waiting for the next display set.
-                    .readTimeout(0, TimeUnit.SECONDS)
-                    .build()
-                client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                    val source = response.body?.source() ?: return@use
-                    val acc = mutableListOf<DisplaySet>()
-                    while (isActive) {
-                        val line = source.readUtf8Line() ?: break
-                        if (line.isBlank()) continue
-                        try {
-                            val wire = subtitleJson.decodeFromString<ImageDisplaySetWire>(line)
-                            val objects = wire.o.mapNotNull { obj ->
-                                val bytes = Base64.decode(obj.png, Base64.DEFAULT)
-                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                bitmap?.let { Positioned(obj.x, obj.y, it) }
+            val client = ApiClient.authenticatedOkHttpClient().newBuilder()
+                // This is a long-lived, growing stream — must not time
+                // out while idle waiting for the next display set.
+                .readTimeout(0, TimeUnit.SECONDS)
+                .build()
+            // A seek-restart tears the hub's pipeline down before
+            // recreating the tap files, and this connect (fired off the
+            // epoch bump) can race that window — a one-shot miss here
+            // used to mean subtitles silently never came back until the
+            // next seek or track switch. Retry the CONNECTION a few
+            // times (same 3x/700ms shape as syncOrigin), but only while
+            // nothing has arrived yet — once the stream has proven
+            // itself, an EOF is the hub deliberately closing it.
+            var attempt = 0
+            var gotAnything = false
+            while (isActive) {
+                val call = client.newCall(Request.Builder().url(url).build())
+                // execute()/readUtf8Line() are blocking calls that don't
+                // check coroutine cancellation between reads — only
+                // Call.cancel() actually interrupts a stalled read, by
+                // closing the socket. Without this hook (which
+                // AssSubtitleOverlay's tap already had), every seek's
+                // epoch bump stranded the previous connection — and the
+                // IO thread blocked on it — until the hub happened to
+                // close its end.
+                val cancelHandle = coroutineContext.job.invokeOnCompletion { call.cancel() }
+                try {
+                    call.execute().use { response ->
+                        if (!response.isSuccessful) {
+                            Log.w(TAG, "subs tap http ${response.code} for track=${track.id} attempt=$attempt")
+                            return@use
+                        }
+                        val source = response.body?.source() ?: return@use
+                        val acc = mutableListOf<DisplaySet>()
+                        while (isActive) {
+                            val line = source.readUtf8Line() ?: break
+                            if (line.isBlank()) continue
+                            gotAnything = true
+                            try {
+                                val wire = subtitleJson.decodeFromString<ImageDisplaySetWire>(line)
+                                val objects = wire.o.mapNotNull { obj ->
+                                    val bytes = Base64.decode(obj.png, Base64.DEFAULT)
+                                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    bitmap?.let { Positioned(obj.x, obj.y, it) }
+                                }
+                                acc.add(DisplaySet(wire.s, wire.cw, wire.ch, objects))
+                                sets.value = acc.toList()
+                            } catch (e: Exception) {
+                                // Partial/malformed line — same tolerance as
+                                // the web client's try/catch per-line.
                             }
-                            acc.add(DisplaySet(wire.s, wire.cw, wire.ch, objects))
-                            sets.value = acc.toList()
-                        } catch (e: Exception) {
-                            // Partial/malformed line — same tolerance as
-                            // the web client's try/catch per-line.
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "subs tap failed for track=${track.id} attempt=$attempt", e)
+                } finally {
+                    cancelHandle.dispose()
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "subs tap failed for track=${track.id}", e)
+                if (gotAnything || ++attempt >= 3) break
+                delay(700)
             }
         }
     }
@@ -155,7 +182,14 @@ fun ImageSubtitleOverlay(
     // well inside PGS timing tolerance.
     LaunchedEffect(subtitleSession.epoch, track.id) {
         while (isActive) {
-            val t = player.currentPosition + currentSubtitleSession.offsetMs
+            // Absolute video time in every mode: [player] is the
+            // ViewModel's ForwardingPlayer, whose getCurrentPosition()
+            // folds in offsetMs (including syncOrigin's live correction)
+            // itself. Adding the session offset here too — as this did
+            // before the ForwardingPlayer reported absolute time —
+            // double-counted it, desyncing subtitles after every
+            // seek/resume.
+            val t = player.currentPosition
             currentSet = sets.value.lastOrNull { it.startMs <= t }
             delay(200)
         }

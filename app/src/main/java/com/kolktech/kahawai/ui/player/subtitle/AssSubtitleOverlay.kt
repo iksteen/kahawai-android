@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
@@ -66,18 +67,16 @@ fun AssSubtitleOverlay(
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var frame by remember(subtitleSession.epoch, track.id) { mutableStateOf<AssFrame?>(null) }
     var frameSize by remember(subtitleSession.epoch, track.id) { mutableStateOf(IntSize.Zero) }
-    // resizeMode and subtitleSession are plain parameters, not
-    // MutableState — a coroutine that captures either directly only ever
-    // sees the value from when it launched. The render loop below lives
-    // inside a LaunchedEffect keyed ONLY on (epoch, track.id) now (see
-    // the ass/assRender lifecycle note ahead), so it needs
-    // rememberUpdatedState to keep seeing live resize-mode toggles AND
-    // PlayerViewModel.syncOrigin's offsetMs corrections — without either
-    // needing to restart the loop (a resize toggle) or reconnect the .ass
-    // tap (an offsetMs correction, which arrives on the SAME epoch by
-    // design; see SubtitleSession's doc comment).
+    // resizeMode is a plain parameter, not MutableState — a coroutine
+    // that captures it directly only ever sees the value from when it
+    // launched. The render loop below lives inside a LaunchedEffect keyed
+    // ONLY on (epoch, track.id) (see the ass/assRender lifecycle note
+    // ahead), so it needs rememberUpdatedState to keep seeing live
+    // resize-mode toggles without restarting the loop. Timing needs no
+    // such plumbing: the render loop reads the absolute clock off
+    // [player] directly (see the renderFrame call), which also picks up
+    // PlayerViewModel.syncOrigin's live offset corrections for free.
     val currentResizeMode by rememberUpdatedState(resizeMode)
-    val currentSubtitleSession by rememberUpdatedState(subtitleSession)
 
     // ass/assRender's entire native lifecycle — create, feed fonts/track,
     // render, release — now lives inside ONE coroutine, rather than
@@ -142,55 +141,77 @@ fun AssSubtitleOverlay(
                             // them) — must not time out while idle.
                             .readTimeout(0, TimeUnit.SECONDS)
                             .build()
-                        val call = client.newCall(Request.Builder().url(url).build())
-                        // execute()/readUtf8Line() are blocking calls
-                        // that don't check coroutine cancellation
-                        // between reads — only Call.cancel() actually
-                        // interrupts a stalled read, by closing the
-                        // socket. Without this hook, a cancelled
-                        // coroutine leaves this readTimeout(0) connection
-                        // open until the hub happens to send another
-                        // line or closes it itself.
-                        val cancelHandle = coroutineContext.job.invokeOnCompletion { call.cancel() }
-                        try {
-                            call.execute().use { response ->
-                                val source = response.body?.source() ?: return@use
-                                val header = StringBuilder()
-                                var sawEvents = false
-                                var headerDone = false
-                                // Accumulate from the very start
-                                // ([Script Info], [V4+ Styles], ...)
-                                // through the Events "Format:" line —
-                                // libass needs all of it, same span
-                                // JASSUB's subContent covers on the web.
-                                while (isActive && !headerDone) {
-                                    val line = source.readUtf8Line() ?: break
-                                    header.append(line).append('\n')
-                                    if (!sawEvents && line.trim().equals("[Events]", ignoreCase = true)) sawEvents = true
-                                    if (sawEvents && line.trim().startsWith("Format:", ignoreCase = true)) headerDone = true
+                        // A seek-restart tears the hub's pipeline down
+                        // before recreating the tap files, and this
+                        // connect (fired off the epoch bump) can race
+                        // that window — a one-shot miss here used to
+                        // mean subtitles silently never came back until
+                        // the next seek or track switch. Retry the
+                        // CONNECTION a few times (same 3x/700ms shape as
+                        // syncOrigin), but only while libass hasn't been
+                        // fed anything yet: a reconnect re-serves the
+                        // stream from its start, so retrying past that
+                        // point would feed duplicate events.
+                        var attempt = 0
+                        var fedAnything = false
+                        while (isActive) {
+                            val call = client.newCall(Request.Builder().url(url).build())
+                            // execute()/readUtf8Line() are blocking calls
+                            // that don't check coroutine cancellation
+                            // between reads — only Call.cancel() actually
+                            // interrupts a stalled read, by closing the
+                            // socket. Without this hook, a cancelled
+                            // coroutine leaves this readTimeout(0) connection
+                            // open until the hub happens to send another
+                            // line or closes it itself.
+                            val cancelHandle = coroutineContext.job.invokeOnCompletion { call.cancel() }
+                            try {
+                                call.execute().use { response ->
+                                    if (!response.isSuccessful) {
+                                        Log.w(TAG, ".ass tap http ${response.code} for track=${track.id} attempt=$attempt")
+                                        return@use
+                                    }
+                                    val source = response.body?.source() ?: return@use
+                                    val header = StringBuilder()
+                                    var sawEvents = false
+                                    var headerDone = false
+                                    // Accumulate from the very start
+                                    // ([Script Info], [V4+ Styles], ...)
+                                    // through the Events "Format:" line —
+                                    // libass needs all of it, same span
+                                    // JASSUB's subContent covers on the web.
+                                    while (isActive && !headerDone) {
+                                        val line = source.readUtf8Line() ?: break
+                                        header.append(line).append('\n')
+                                        if (!sawEvents && line.trim().equals("[Events]", ignoreCase = true)) sawEvents = true
+                                        if (sawEvents && line.trim().startsWith("Format:", ignoreCase = true)) headerDone = true
+                                    }
+                                    if (!headerDone) return@use
+                                    fedAnything = true
+                                    assTrack.readBuffer(header.toString().toByteArray())
+                                    // Each subsequent Dialogue line is
+                                    // re-fed with the section marker so
+                                    // libass's line-oriented parser stays in
+                                    // [Events] context — mirrors JASSUB's
+                                    // `processData('[Events]\n' + lines)`,
+                                    // just per-line instead of batched
+                                    // (dialogue lines never embed a newline,
+                                    // so this is equally correct).
+                                    while (isActive) {
+                                        val line = source.readUtf8Line() ?: break
+                                        if (line.isBlank()) continue
+                                        assTrack.readBuffer("[Events]\n$line\n".toByteArray())
+                                    }
                                 }
-                                if (!headerDone) return@use
-                                assTrack.readBuffer(header.toString().toByteArray())
-                                // Each subsequent Dialogue line is
-                                // re-fed with the section marker so
-                                // libass's line-oriented parser stays in
-                                // [Events] context — mirrors JASSUB's
-                                // `processData('[Events]\n' + lines)`,
-                                // just per-line instead of batched
-                                // (dialogue lines never embed a newline,
-                                // so this is equally correct).
-                                while (isActive) {
-                                    val line = source.readUtf8Line() ?: break
-                                    if (line.isBlank()) continue
-                                    assTrack.readBuffer("[Events]\n$line\n".toByteArray())
-                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Log.w(TAG, ".ass tap failed for track=${track.id} attempt=$attempt", e)
+                            } finally {
+                                cancelHandle.dispose()
                             }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            Log.w(TAG, ".ass tap failed for track=${track.id}", e)
-                        } finally {
-                            cancelHandle.dispose()
+                            if (fedAnything || ++attempt >= 3) break
+                            delay(700)
                         }
                     }
                 }
@@ -228,7 +249,15 @@ fun AssSubtitleOverlay(
                                 assRender.setFrameSize(w, h)
                                 frameSize = IntSize(w, h)
                             }
-                            val t = player.currentPosition + currentSubtitleSession.offsetMs
+                            // Absolute video time in every mode: [player]
+                            // is the ViewModel's ForwardingPlayer, whose
+                            // getCurrentPosition() folds in offsetMs
+                            // (including syncOrigin's live correction)
+                            // itself. Adding the session offset here too —
+                            // as this did before the ForwardingPlayer
+                            // reported absolute time — double-counted it,
+                            // desyncing subtitles after every seek/resume.
+                            val t = player.currentPosition
                             val result = withContext(Dispatchers.Default) { assRender.renderFrame(t, AssTexType.BITMAP_ALPHA) }
                             if (result != null && result.changed != 0) frame = result
                         }
