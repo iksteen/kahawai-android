@@ -25,12 +25,15 @@ import androidx.navigation.navArgument
 import com.kolktech.kahawai.KahawaiApp
 import kotlinx.coroutines.launch
 import com.kolktech.kahawai.data.repository.CatalogRepository
+import com.kolktech.kahawai.ui.admin.AdminScreen
 import com.kolktech.kahawai.ui.detail.DetailScreen
 import com.kolktech.kahawai.ui.home.HomeScreen
 import com.kolktech.kahawai.ui.library.LibraryScreen
 import com.kolktech.kahawai.ui.login.LoginScreen
 import com.kolktech.kahawai.ui.player.PlayerScreen
 import com.kolktech.kahawai.ui.search.SearchScreen
+import com.kolktech.kahawai.ui.settings.AppSettingsScreen
+import com.kolktech.kahawai.ui.settings.ServerSettingsScreen
 import com.kolktech.kahawai.ui.setup.ServerSetupScreen
 
 private object Routes {
@@ -38,6 +41,9 @@ private object Routes {
     const val LOGIN = "login"
     const val HOME = "home"
     const val SEARCH = "search"
+    const val APP_SETTINGS = "app_settings"
+    const val SERVER_SETTINGS = "server_settings"
+    const val ADMIN = "admin"
     const val LIBRARY = "library/{libraryId}?name={name}"
     const val DETAIL = "detail/{itemId}"
     const val PLAYER = "player/{itemId}?startMs={startMs}&audioTrack={audioTrack}&subtitleTrack={subtitleTrack}"
@@ -117,9 +123,38 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
         composable(Routes.HOME) {
             HomeScreen(
                 repo = catalogRepository,
+                isAdmin = app.tokenStore.isAdmin,
                 onOpenItem = { itemId -> navController.navigate(Routes.detail(itemId)) },
                 onOpenLibrary = { id, name -> navController.navigate(Routes.library(id, name)) },
                 onSearch = { navController.navigate(Routes.SEARCH) },
+                onOpenAppSettings = { navController.navigate(Routes.APP_SETTINGS) },
+                onOpenServerSettings = { navController.navigate(Routes.SERVER_SETTINGS) },
+                onOpenAdmin = { navController.navigate(Routes.ADMIN) },
+                // Same effect as an expired session: clear tokens, pop back
+                // to a fresh Login.
+                onLogout = onSessionExpired,
+                onSessionExpired = onSessionExpired,
+            )
+        }
+        composable(Routes.APP_SETTINGS) {
+            AppSettingsScreen(
+                serverConfigStore = app.serverConfigStore,
+                tokenStore = app.tokenStore,
+                onBack = { navController.popBackStack() },
+                onChangeServer = {
+                    navController.navigate(Routes.SETUP) { popUpTo(0) { inclusive = true } }
+                },
+            )
+        }
+        composable(Routes.SERVER_SETTINGS) {
+            ServerSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onSessionExpired = onSessionExpired,
+            )
+        }
+        composable(Routes.ADMIN) {
+            AdminScreen(
+                onBack = { navController.popBackStack() },
                 onSessionExpired = onSessionExpired,
             )
         }

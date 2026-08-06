@@ -54,14 +54,11 @@ class ServerSetupViewModel(
                 // Probed against the candidate URL directly — nothing is
                 // persisted until the hub actually answers, so a typo'd
                 // address never becomes the stored base URL.
-                val bootstrap = ApiClient.probeApiService(url).bootstrap()
-                if (bootstrap.setupRequired) {
-                    _state.value = ServerSetupState.Error(
-                        "This hub hasn't completed first-time setup yet. " +
-                            "Finish setup via the web UI, then come back here.",
-                    )
-                    return@launch
-                }
+                // Setup completion is no longer checked here — a hub that
+                // still needs its first admin account is handled by the
+                // Login screen's own setup-token entry, not a separate
+                // gate on this address-probing step.
+                ApiClient.probeApiService(url).bootstrap()
                 val previous = serverConfigStore.baseUrl
                 serverConfigStore.baseUrl = url
                 ApiClient.reset()

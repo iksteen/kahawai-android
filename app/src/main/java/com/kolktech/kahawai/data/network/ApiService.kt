@@ -7,11 +7,15 @@ import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
 import com.kolktech.kahawai.data.network.dto.ItemsResponse
 import com.kolktech.kahawai.data.network.dto.LibrariesResponse
 import com.kolktech.kahawai.data.network.dto.LoginRequest
+import com.kolktech.kahawai.data.network.dto.PrefsResponse
 import com.kolktech.kahawai.data.network.dto.ProgressRequest
+import com.kolktech.kahawai.data.network.dto.PutPrefRequest
+import com.kolktech.kahawai.data.network.dto.PutPrefResponse
 import com.kolktech.kahawai.data.network.dto.RefreshRequest
 import com.kolktech.kahawai.data.network.dto.FontsResponse
 import com.kolktech.kahawai.data.network.dto.SeekRequest
 import com.kolktech.kahawai.data.network.dto.SeekResponse
+import com.kolktech.kahawai.data.network.dto.SetupRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.TokenPair
@@ -20,6 +24,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.HTTP
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -32,6 +37,11 @@ interface ApiService {
 
     @POST("api/v1/auth/token")
     suspend fun login(@Body body: LoginRequest): TokenPair
+
+    /// First-time admin account creation (crates/kahawai-hub/src/api.rs:1206).
+    /// Unauthenticated like [login] — called via [ApiClient.plainApiService].
+    @POST("api/v1/setup")
+    suspend fun setup(@Body body: SetupRequest): TokenPair
 
     @POST("api/v1/auth/refresh")
     suspend fun refresh(@Body body: RefreshRequest): TokenPair
@@ -79,4 +89,13 @@ interface ApiService {
 
     @DELETE("api/v1/playback/sessions/{id}")
     suspend fun endSession(@Path("id") id: String)
+
+    /// Per-user preferences (HUB-33) — audio/subtitle language defaults,
+    /// OpenSubtitles account, bandwidth cap, ASS fallback order. See
+    /// [com.kolktech.kahawai.ui.settings.ServerSettingsScreen].
+    @GET("api/v1/prefs")
+    suspend fun prefs(): PrefsResponse
+
+    @PUT("api/v1/prefs")
+    suspend fun putPref(@Body body: PutPrefRequest): PutPrefResponse
 }
