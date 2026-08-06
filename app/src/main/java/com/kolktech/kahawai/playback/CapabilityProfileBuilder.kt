@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.os.Build
 import android.view.Display
 import com.kolktech.kahawai.data.network.dto.CapabilityProfile
+import com.kolktech.kahawai.data.network.dto.TargetDuration
 import com.kolktech.kahawai.data.network.dto.VideoCap
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -67,6 +68,12 @@ object CapabilityProfileBuilder {
             // format every text rung (converted SRT, flattened ASS,
             // OCR) is delivered as.
             vttRender = true,
+            // ExoPlayer times out an idle HLS playlist at 3.5x the
+            // declared EXT-X-TARGETDURATION (HUB-17) — the old fixed
+            // 2s constant is what caused that hang, so this client
+            // needs the measured, keyframe-bound truth rather than
+            // `Ignore`.
+            targetDuration = TargetDuration.Accurate,
         )
     }
 

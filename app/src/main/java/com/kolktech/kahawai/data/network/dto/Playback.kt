@@ -1,6 +1,9 @@
 package com.kolktech.kahawai.data.network.dto
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonClassDiscriminator
 
 /// Mirrors `VideoCap` in crates/kahawai-core/src/media.rs:127-137.
 @Serializable
@@ -9,6 +12,30 @@ data class VideoCap(
     val maxProfile: String? = null,
     val maxLevel: String? = null,
 )
+
+/// Mirrors `TargetDuration` in crates/kahawai-core/src/media.rs:129-144
+/// (`#[serde(tag = "mode")]`). Required on [CapabilityProfile] — there is
+/// no default that is right for every client. ExoPlayer times out an
+/// idle playlist at 3.5x the declared value (kahawai-status-checklist.md,
+/// HUB-17), so `Accurate` — the measured keyframe-bound truth — is what
+/// this client needs; the old constant-and-violate `Ignore` behaviour is
+/// what caused that hang in the first place.
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+@JsonClassDiscriminator("mode")
+sealed class TargetDuration {
+    @Serializable
+    @SerialName("ignore")
+    object Ignore : TargetDuration()
+
+    @Serializable
+    @SerialName("accurate")
+    object Accurate : TargetDuration()
+
+    @Serializable
+    @SerialName("short")
+    data class Short(val maxSecs: Int) : TargetDuration()
+}
 
 /// Mirrors `CapabilityProfile` in crates/kahawai-core/src/media.rs:99-137
 /// — sent verbatim on every session start (HUB-14) and on every item
@@ -33,6 +60,7 @@ data class CapabilityProfile(
     // read text, since that's what the conservative fallback has
     // always delivered.
     val vttRender: Boolean = true,
+    val targetDuration: TargetDuration,
 )
 
 @Serializable
