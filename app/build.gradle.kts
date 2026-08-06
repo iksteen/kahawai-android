@@ -18,7 +18,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
@@ -29,6 +31,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -47,6 +50,14 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.tink.android)
+    // Installs Jetpack libraries' bundled baseline profiles (Compose,
+    // etc.) into ART on first run so their hot paths are AOT-compiled
+    // instead of interpreted/JIT-warming — the difference is most visible
+    // on slow devices' cold start and first scroll. A full app-specific
+    // baseline profile (covering our own screens) needs a macrobenchmark
+    // module driven by an instrumented test on a connected device/emulator
+    // to generate, which this change doesn't add.
+    implementation(libs.androidx.profileinstaller)
 
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)

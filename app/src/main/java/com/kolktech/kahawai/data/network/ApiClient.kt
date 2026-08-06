@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import com.kolktech.kahawai.BuildConfig
 import com.kolktech.kahawai.data.auth.ServerConfigStore
 import com.kolktech.kahawai.data.auth.TokenStore
 import retrofit2.Retrofit
@@ -83,7 +84,7 @@ object ApiClient {
 
     private fun plainClient(): OkHttpClient {
         return plainClient ?: OkHttpClient.Builder()
-            .addInterceptor(loggingInterceptor())
+            .apply { if (BuildConfig.DEBUG) addInterceptor(loggingInterceptor()) }
             .connectTimeout(10, TimeUnit.SECONDS)
             .build()
             .also { plainClient = it }
@@ -92,7 +93,7 @@ object ApiClient {
     private fun authClient(): OkHttpClient {
         return authClient ?: OkHttpClient.Builder()
             .addInterceptor(AuthInterceptor(tokenStore))
-            .addInterceptor(loggingInterceptor())
+            .apply { if (BuildConfig.DEBUG) addInterceptor(loggingInterceptor()) }
             .authenticator(TokenAuthenticator(tokenStore) { plainApiService() })
             .connectTimeout(10, TimeUnit.SECONDS)
             .build()

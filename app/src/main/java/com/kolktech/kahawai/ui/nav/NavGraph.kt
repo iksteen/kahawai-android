@@ -1,9 +1,17 @@
 package com.kolktech.kahawai.ui.nav
 
 import android.net.Uri
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.animation.ExitTransition
 import androidx.navigation.NavHostController
@@ -41,6 +49,25 @@ private object Routes {
 
 @Composable
 fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
+    // Token hydration (disk read + Keystore decrypt) runs off the main
+    // thread now (see TokenStore.hydrated) instead of blocking process
+    // startup, so the very first composition here can land before it's
+    // done. Waiting on it — rather than reading hasTokens early and
+    // risking a false "logged out" — costs at most a brief spinner
+    // instead of a login-screen flash for a session that's actually
+    // still valid.
+    var tokensReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        app.tokenStore.hydrated.await()
+        tokensReady = true
+    }
+    if (!tokensReady) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+
     val navController: NavHostController = rememberNavController()
     val catalogRepository = remember { CatalogRepository() }
     val coroutineScope = rememberCoroutineScope()

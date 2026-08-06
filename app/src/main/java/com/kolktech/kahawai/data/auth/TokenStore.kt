@@ -10,8 +10,12 @@ import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.aead.AeadConfig
 import com.google.crypto.tink.integration.android.AndroidKeysetManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import com.kolktech.kahawai.data.network.dto.TokenPair
 
 private val Context.tokenDataStore by preferencesDataStore("kahawai_tokens")
@@ -45,8 +49,23 @@ class TokenStore(private val context: Context) {
             .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
     }
 
+    private val hydrationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     @Volatile
-    private var cache: Pair<String, String>? = runBlocking { readFromDisk() }
+    private var cache: Pair<String, String>? = null
+
+    /// Disk read + Keystore decrypt can take a while on slow hardware —
+    /// kicked off here instead of blocking [Application.onCreate] with
+    /// `runBlocking`, which used to stall the very first frame. Callers on
+    /// the main thread that need [hasTokens]/[accessToken] to reflect a
+    /// real disk state (e.g. picking the nav graph's start destination)
+    /// must await this first; [AuthInterceptor]/[TokenAuthenticator] read
+    /// the synchronous properties directly since they run on an OkHttp
+    /// background thread after the app is already up, by which point this
+    /// has long since completed.
+    val hydrated: Deferred<Unit> = hydrationScope.async {
+        cache = readFromDisk()
+    }
 
     val accessToken: String? get() = cache?.first
     val refreshToken: String? get() = cache?.second

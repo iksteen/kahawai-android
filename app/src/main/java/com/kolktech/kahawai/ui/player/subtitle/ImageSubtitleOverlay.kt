@@ -38,6 +38,15 @@ import kotlin.coroutines.coroutineContext
 
 private const val TAG = "ImageSubtitleOverlay"
 
+/// The redraw loop below always prefers the newest set whose startMs has
+/// passed (`lastOrNull { it.startMs <= t }`), so once a later set has
+/// arrived, everything before its immediate predecessor is unreachable —
+/// keeping every set (bitmaps included) for a whole session was unbounded
+/// memory growth on long content. This trailing window is generous enough
+/// to cover the 200ms redraw poll and a lingering pause without ever
+/// discarding a set that could still be the active one.
+private const val MAX_BUFFERED_SETS = 8
+
 /// One line of the session's `subs-{id}.jsonl` tap for an IMAGE
 /// (PGS/VobSub) track — a decoded display set. Composition space (`cw`,
 /// `ch`) is authored against the source's own subtitle-composition
@@ -163,7 +172,7 @@ fun ImageSubtitleOverlay(
                             return@use
                         }
                         val source = response.body?.source() ?: return@use
-                        val acc = mutableListOf<DisplaySet>()
+                        val acc = ArrayDeque<DisplaySet>()
                         while (isActive) {
                             val line = source.readUtf8Line() ?: break
                             if (line.isBlank()) continue
@@ -175,7 +184,8 @@ fun ImageSubtitleOverlay(
                                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                     bitmap?.let { Positioned(obj.x, obj.y, it) }
                                 }
-                                acc.add(DisplaySet(wire.s, wire.cw, wire.ch, objects))
+                                acc.addLast(DisplaySet(wire.s, wire.cw, wire.ch, objects))
+                                while (acc.size > MAX_BUFFERED_SETS) acc.removeFirst()
                                 sets.value = acc.toList()
                             } catch (e: Exception) {
                                 // Partial/malformed line — same tolerance as
