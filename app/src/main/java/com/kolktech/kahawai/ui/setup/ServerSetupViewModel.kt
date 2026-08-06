@@ -58,14 +58,20 @@ class ServerSetupViewModel(
                 // still needs its first admin account is handled by the
                 // Login screen's own setup-token entry, not a separate
                 // gate on this address-probing step.
-                ApiClient.probeApiService(url).bootstrap()
+                // The candidate is first resolved through any http→https
+                // redirect the host serves (see [ApiClient.resolveBaseUrl]):
+                // storing the pre-redirect URL would leave every
+                // authenticated request bouncing through a redirect that
+                // strips its Authorization header.
+                val resolved = ApiClient.resolveBaseUrl(url)
+                ApiClient.probeApiService(resolved).bootstrap()
                 val previous = serverConfigStore.baseUrl
-                serverConfigStore.baseUrl = url
+                serverConfigStore.baseUrl = resolved
                 ApiClient.reset()
                 // Tokens are per-hub; carrying the old hub's pair to a new
                 // one just guarantees a 401 (and sends credentials where
                 // they don't belong).
-                if (previous != null && previous.trimEnd('/') != url.trimEnd('/')) {
+                if (previous != null && previous.trimEnd('/') != resolved.trimEnd('/')) {
                     tokenStore.clear()
                 }
                 _state.value = ServerSetupState.ReadyForLogin

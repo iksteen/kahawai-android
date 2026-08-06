@@ -1,10 +1,13 @@
 package com.kolktech.kahawai.data.network
 
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.logging.HttpLoggingInterceptor
 import com.kolktech.kahawai.BuildConfig
 import com.kolktech.kahawai.data.auth.ServerConfigStore
@@ -55,6 +58,30 @@ object ApiClient {
     /// base URL. Not cached: setup is a one-shot flow.
     fun probeApiService(candidateBaseUrl: String): ApiService =
         buildRetrofit(plainClient(), normalize(candidateBaseUrl)).create(ApiService::class.java)
+
+    /// Follows any redirect on the bootstrap route (typically a proxy's
+    /// http→https 301/308) and returns the base URL the hub actually
+    /// answers on. Persisting the pre-redirect URL would poison every
+    /// later authenticated call: OkHttp strips the Authorization header
+    /// whenever a redirect crosses scheme/host/port, so the hub would see
+    /// tokenless requests and 401 them even though login itself (which
+    /// needs no token) appeared to work.
+    suspend fun resolveBaseUrl(candidateBaseUrl: String): String {
+        val base = normalize(candidateBaseUrl)
+        val probePath = "api/v1/bootstrap"
+        val finalUrl = withContext(Dispatchers.IO) {
+            plainClient().newCall(Request.Builder().url(base + probePath).build())
+                .execute()
+                .use { it.request.url.toString() }
+        }
+        // A proxy that rewrites the path beyond scheme/host isn't a plain
+        // canonicalizing redirect — don't guess, keep what the user typed.
+        return if (finalUrl.endsWith("/$probePath")) {
+            normalize(finalUrl.removeSuffix(probePath))
+        } else {
+            base
+        }
+    }
 
     fun apiService(): ApiService = authRetrofit().create(ApiService::class.java)
 
