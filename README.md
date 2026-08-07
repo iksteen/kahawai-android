@@ -1,15 +1,19 @@
 # Kahawai — Android
 
-A native Android client for a [kahawai](https://github.com/iksteen/kahawai)
-hub: browse the catalog, search, and play. Kotlin + Jetpack Compose +
-Media3 (ExoPlayer). Talks only to the hub's versioned `/api/v1/*`
-surface — same contract the web UI (`../web/`) uses, no private
-endpoints.
+A native Android and Google TV client for [kahawai](https://github.com/iksteen/kahawai) hub.
+Kotlin + Jetpack Compose + Media3 (ExoPlayer). Talks only to the hub's 
+versioned `/api/v1/*` surface — the same contract the kahawai web UI 
+uses, no private endpoints.
+
+> **⚠️ Status: in active development.** Kahawai itself is still in 
+> development, and this app tracks the hub API as it changes. Expect
+> breaking changes without notice — a client build may stop working
+> against a newer (or older) hub until updated. There are no stable
+> releases yet.
 
 ## Build
 
 ```sh
-cd android
 ./gradlew assembleDebug
 ```
 
@@ -34,45 +38,44 @@ scheme, since a bare `kahawai hub` process serves plain HTTP by default
 for a real deployment. From an emulator, the host machine's loopback is
 `10.0.2.2`, not `127.0.0.1`.
 
+The app also runs as a Google TV / Android TV app (leanback launcher
+entry, D-pad friendly UI).
+
 ## What's here
 
 - **Auth**: bearer JWT + rotating refresh token, encrypted at rest via
   DataStore + Tink (Android Keystore-backed AES-256-GCM) — see
-  `data/auth/TokenStore.kt`.
+  `data/auth/TokenStore.kt`. Supports first-time hub setup via setup
+  key.
 - **Catalog**: `data/repository/CatalogRepository.kt` — libraries, items
-  (browse/search), item detail, children (episodes/tracks).
+  (browse/search), item detail, children (episodes/tracks), watch
+  progress shown on browse screens.
 - **Playback**: `playback/CapabilityProfileBuilder.kt` probes the
   device's actual decoders (`MediaCodecList`) rather than hardcoding a
-  claim, same principle as the web client's runtime `MediaSource`
-  probing. `ui/player/PlayerViewModel.kt` owns the session lifecycle:
+  claim. `ui/player/PlayerViewModel.kt` owns the session lifecycle:
   start → attach a Media3 `MediaItem` (progressive for `direct` mode,
   HLS for `remux`/`transcode`) → report progress every 10s → seek
   (routed through the hub's seek-restart endpoint for HLS sessions,
   since those serve a growing EVENT playlist) → end session on exit.
+  Resume/start-over prompts and next-episode auto-advance for series.
+- **Subtitles**: text tracks render on-device (`ui/player/subtitle/`);
+  image-format tracks are burned in by the hub.
+- **Admin & settings**: hub administration and app settings screens
+  (`ui/admin/`, `ui/settings/`), reachable from the navigation drawer.
 
-## Known gaps (by design, this pass)
+## Known gaps (for now)
 
-- No subtitle rendering (`ass_render`/`graphics_overlay` are sent
-  `false`, so the hub only offers modes this app can actually honor).
 - No downloads/offline playback.
-- No Android TV/leanback UI.
-- No live catalog refresh via `/api/v1/events` (SSE) — Home/Search just
-  re-fetch on open.
+- No live catalog refresh via `/api/v1/events` (SSE) — screens re-fetch
+  when you return to them.
 - HLS seeks always round-trip through the hub's seek-restart endpoint,
-  even when the target is already inside what's been produced —
-  simpler than the web client's in-range check, and always correct,
-  just one extra round trip on some seeks.
+  even when the target is already inside what's been produced — always
+  correct, just one extra round trip on some seeks.
 
-## Verifying against a real hub
+## Developing against a hub
 
-```sh
-# from the repo root
-cargo build
-pkill -f '^\./target/debug/kahawai hub'
-nohup ./target/debug/kahawai hub >> ~/.local/share/kahawai/hub.log 2>&1 &
-```
-
-The hub alone is enough to verify auth, browsing, search, and session
-negotiation. Actually decoding a file also needs a `mediahost` (serves
-the bytes) and, for content that needs it, a `transcoder` — see
-`../docs/kahawai-deployment.md`.
+You'll need a running kahawai hub to point the app at — see the
+[kahawai](https://github.com/iksteen/kahawai) repo for how to build and
+deploy one. The hub alone is enough to exercise auth, browsing, search,
+and session negotiation; actually playing a file also needs a
+`mediahost` and, for content that needs it, a `transcoder`.
