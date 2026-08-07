@@ -9,7 +9,18 @@ import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
 import com.kolktech.kahawai.data.network.dto.ItemsResponse
 import com.kolktech.kahawai.data.network.dto.LibrarySummary
 
-class CatalogRepository(private val api: ApiService = ApiClient.apiService()) {
+/// [api] is built lazily, not eagerly at construction: this repository is
+/// `remember`ed once at the top of the nav graph, which composes (and
+/// thus constructs this) before the user has necessarily been through
+/// Setup — an eager [ApiClient.apiService] call would hit
+/// [ApiClient.baseUrl]'s "hub server not configured yet" throw on every
+/// first launch, well before the Setup screen ever renders. Deferring
+/// construction to first actual use means it only runs once a hub is
+/// configured, since every suspend fun below is only reachable from
+/// screens gated behind Setup.
+class CatalogRepository(apiProvider: () -> ApiService = { ApiClient.apiService() }) {
+    private val api: ApiService by lazy(apiProvider)
+
     suspend fun libraries(): List<LibrarySummary> = api.libraries().libraries
 
     suspend fun items(
@@ -47,12 +58,17 @@ class CatalogRepository(private val api: ApiService = ApiClient.apiService()) {
     /// `size` is one of the hub's named sizes ("thumb", "card"); null
     /// serves the original. `version` busts the cache on re-match
     /// (web/src/api.ts:189-195) — the hub caches artwork for a day.
-    fun artworkUrl(id: String, version: Long?, size: String? = null): String {
+    /// Called from composition (Coil's `model`), so it must not throw:
+    /// null falls through to Coil as "no image" rather than crashing the
+    /// screen that's still on-screen while the server gets unconfigured
+    /// (e.g. mid "change server" navigation).
+    fun artworkUrl(id: String, version: Long?, size: String? = null): String? {
+        val base = ApiClient.baseUrlOrNull() ?: return null
         val params = buildList {
             size?.let { add("size=$it") }
             version?.let { add("v=$it") }
         }
         val query = if (params.isEmpty()) "" else "?${params.joinToString("&")}"
-        return "${ApiClient.baseUrl()}api/v1/items/$id/artwork$query"
+        return "${base}api/v1/items/$id/artwork$query"
     }
 }

@@ -95,7 +95,14 @@ object ApiClient {
         .build()
 
     fun baseUrl(): String =
-        normalize(serverConfigStore.baseUrl ?: error("hub server not configured yet"))
+        baseUrlOrNull() ?: error("hub server not configured yet")
+
+    /// Non-throwing counterpart of [baseUrl] for callers that can run
+    /// during composition (e.g. artwork URL construction) and may be
+    /// asked for a URL in the brief window between "change server"
+    /// clearing [serverConfigStore] and navigation actually tearing down
+    /// the screens that reference it.
+    fun baseUrlOrNull(): String? = serverConfigStore.baseUrl?.let(::normalize)
 
     private fun normalize(url: String): String = if (url.endsWith("/")) url else "$url/"
 
