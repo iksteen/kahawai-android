@@ -1,5 +1,11 @@
 package com.kolktech.kahawai.ui.search
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -29,7 +36,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -54,6 +63,15 @@ fun SearchScreen(
     val state by viewModel.state.collectAsState()
     OnResumeEffect(viewModel::refresh)
     val focusRequester = remember { FocusRequester() }
+    val backFocusRequester = remember { FocusRequester() }
+    val context = LocalContext.current
+    val voiceLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()
+            ?.let(viewModel::onQueryChange)
+    }
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
@@ -62,7 +80,10 @@ fun SearchScreen(
             TopAppBar(
                 title = { Text("Search") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.focusRequester(backFocusRequester),
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -75,10 +96,30 @@ fun SearchScreen(
                 onValueChange = viewModel::onQueryChange,
                 label = { Text("Search") },
                 singleLine = true,
+                trailingIcon = {
+                    IconButton(onClick = {
+                        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(
+                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                        )
+                        try {
+                            voiceLauncher.launch(intent)
+                        } catch (e: ActivityNotFoundException) {
+                            Toast.makeText(context, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Icon(Icons.Filled.Mic, contentDescription = "Voice search")
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp)
-                    .focusRequester(focusRequester),
+                    .focusRequester(focusRequester)
+                    // D-pad UP from the field has no spatial target (the
+                    // TopAppBar back button sits diagonally left-of-above),
+                    // so on TV focus would just stay put and the back button
+                    // was unreachable without touch. Route it explicitly.
+                    .focusProperties { up = backFocusRequester },
             )
             when (val s = state) {
                 is SearchState.Idle -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
