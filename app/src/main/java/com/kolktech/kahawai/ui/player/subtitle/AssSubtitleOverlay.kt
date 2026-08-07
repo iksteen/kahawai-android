@@ -169,7 +169,7 @@ fun AssSubtitleOverlay(
                                             Log.w(TAG, ".ass tap http ${response.code} url=$url track=${track.id} attempt=$attempt")
                                             return@use
                                         }
-                                        val source = response.body?.source() ?: return@use
+                                        val source = response.body.source()
                                         val header = StringBuilder()
                                         var sawEvents = false
                                         var headerDone = false
@@ -346,6 +346,6 @@ fun AssSubtitleOverlay(
 private fun fetchBytes(url: String): ByteArray? {
     ApiClient.authenticatedOkHttpClient().newCall(Request.Builder().url(url).build()).execute().use { response ->
         if (!response.isSuccessful) return null
-        return response.body?.bytes()
+        return response.body.bytes()
     }
 }

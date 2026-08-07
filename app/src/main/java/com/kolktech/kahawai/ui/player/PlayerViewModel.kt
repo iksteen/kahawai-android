@@ -973,8 +973,8 @@ class PlayerViewModel(
                                     Log.d(TAG, "syncOrigin http ${response.code} epoch=$forEpoch attempt=$attempt")
                                     return@use null
                                 }
-                                val raw = response.body?.string()?.trim()
-                                val parsed = raw?.toDoubleOrNull()?.let(Math::round)
+                                val raw = response.body.string().trim()
+                                val parsed = raw.toDoubleOrNull()?.let(Math::round)
                                 if (parsed == null) Log.d(TAG, "syncOrigin unparseable epoch=$forEpoch attempt=$attempt raw=$raw")
                                 parsed
                             }

@@ -175,7 +175,7 @@ fun ImageSubtitleOverlay(
                             Log.w(TAG, "subs tap http ${response.code} for track=${track.id} attempt=$attempt")
                             return@use
                         }
-                        val source = response.body?.source() ?: return@use
+                        val source = response.body.source()
                         val acc = ArrayDeque<DisplaySet>()
                         while (isActive) {
                             val line = source.readUtf8Line() ?: break
