@@ -49,6 +49,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
+import com.kolktech.kahawai.ui.components.OnResumeEffect
 import com.kolktech.kahawai.ui.components.PosterCard
 import com.kolktech.kahawai.ui.theme.KahawaiOnSurfaceVariant
 
@@ -73,6 +74,7 @@ fun HomeScreen(
         factory = viewModelFactory { initializer { HomeViewModel(repo) } },
     )
     val state by viewModel.state.collectAsState()
+    OnResumeEffect(viewModel::refresh)
     var menuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(

@@ -34,25 +34,46 @@ class HomeViewModel(private val repo: CatalogRepository) : ViewModel() {
         _state.value = HomeState.Loading
         viewModelScope.launch {
             try {
-                val libraries = repo.libraries()
-                // One request per library, concurrently — the items
-                // endpoint has no "top N per library" shape, mirroring
-                // web/src/views/Libraries.tsx:31-34.
-                val rows = coroutineScope {
-                    libraries
-                        .map { library ->
-                            async {
-                                val response = repo.items(library = library.id, sort = "-added", limit = ROW_SIZE)
-                                LibraryRow(library, response.items, response.total)
-                            }
-                        }
-                        .awaitAll()
-                }
-                _state.value = HomeState.Loaded(rows.filter { it.items.isNotEmpty() })
+                _state.value = HomeState.Loaded(fetchRows())
             } catch (e: Exception) {
                 _state.value = HomeState.Error(e.readableMessage(), e.isAuthError())
             }
         }
+    }
+
+    /// In-place re-fetch for an already-showing screen (back from the
+    /// player, app foregrounded) — keeps the current rows up instead of
+    /// dropping to the Loading spinner, so watch-progress bars update
+    /// without a flash or focus loss. The Loaded guard also skips the
+    /// ON_RESUME that fires during init{}'s own load. Best-effort: a
+    /// failure keeps what's shown.
+    fun refresh() {
+        if (_state.value !is HomeState.Loaded) return
+        viewModelScope.launch {
+            try {
+                _state.value = HomeState.Loaded(fetchRows())
+            } catch (e: Exception) {
+                // Keep showing the rows we have.
+            }
+        }
+    }
+
+    private suspend fun fetchRows(): List<LibraryRow> {
+        val libraries = repo.libraries()
+        // One request per library, concurrently — the items
+        // endpoint has no "top N per library" shape, mirroring
+        // web/src/views/Libraries.tsx:31-34.
+        val rows = coroutineScope {
+            libraries
+                .map { library ->
+                    async {
+                        val response = repo.items(library = library.id, sort = "-added", limit = ROW_SIZE)
+                        LibraryRow(library, response.items, response.total)
+                    }
+                }
+                .awaitAll()
+        }
+        return rows.filter { it.items.isNotEmpty() }
     }
 
     private companion object {

@@ -67,6 +67,38 @@ class DetailViewModel(
         }
     }
 
+    /// Re-fetch for a screen that's already showing data — returning from
+    /// the player (resume position moved), or the app coming back to the
+    /// foreground. Unlike load() this never drops to Loading: the stale
+    /// content stays up and is swapped in place, so there's no spinner
+    /// flash and no D-pad focus loss. The Loaded guard doubles as
+    /// first-composition protection — ON_RESUME also fires right after
+    /// init{}'s load() starts, while state is still Loading, and this
+    /// silently skips instead of racing it. Track selections survive via
+    /// copy(); a failed refresh keeps showing what we have.
+    fun refresh() {
+        if (_state.value !is DetailState.Loaded) return
+        viewModelScope.launch {
+            try {
+                val profile = CapabilityProfileBuilder.build(getApplication())
+                val detail = repo.queryItem(itemId, profile)
+                val children = if (detail.kind == "show" || detail.kind == "album") {
+                    repo.children(itemId)
+                } else {
+                    emptyList()
+                }
+                val current = _state.value as? DetailState.Loaded ?: return@launch
+                _state.value = current.copy(
+                    detail = detail,
+                    children = children,
+                    subtitleTracks = detail.negotiated?.subtitles ?: emptyList(),
+                )
+            } catch (e: Exception) {
+                // Best-effort; the screen already has content to show.
+            }
+        }
+    }
+
     fun selectSubtitleTrack(track: SubtitleTrack?) {
         val current = _state.value as? DetailState.Loaded ?: return
         _state.value = current.copy(selectedSubtitleTrack = track)

@@ -66,4 +66,22 @@ class SearchViewModel(private val repo: CatalogRepository) : ViewModel() {
     fun retry() {
         viewModelScope.launch { search(_query.value) }
     }
+
+    /// In-place re-run of the current query when results are already up
+    /// (back from the player, app foregrounded), so watch-progress bars
+    /// stay current. Unlike retry()/search() this never sets Loading —
+    /// the visible results are swapped, not blanked — and a failure
+    /// keeps them as-is.
+    fun refresh() {
+        val q = _query.value
+        if (_state.value !is SearchState.Loaded || q.isBlank()) return
+        viewModelScope.launch {
+            try {
+                val result = repo.items(q = q, limit = RESULT_LIMIT)
+                _state.value = SearchState.Loaded(result.items, result.total)
+            } catch (e: Exception) {
+                // Keep showing the results we have.
+            }
+        }
+    }
 }

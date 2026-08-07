@@ -66,6 +66,7 @@ import com.kolktech.kahawai.data.network.dto.VideoStreamInfo
 import com.kolktech.kahawai.data.network.dto.displayLabel
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
+import com.kolktech.kahawai.ui.components.OnResumeEffect
 import com.kolktech.kahawai.ui.components.WatchProgressBar
 
 /// A thick, high-contrast ring around whatever holds D-pad focus. The
@@ -100,6 +101,13 @@ fun DetailScreen(
         factory = viewModelFactory { initializer { DetailViewModel(application, repo, itemId) } },
     )
     val state by viewModel.state.collectAsState()
+
+    // The ViewModel outlives trips into the player (it's retained by this
+    // destination's back-stack entry), so without this the screen would
+    // redisplay the resume position from when it was FIRST opened —
+    // "Resume at 1m" forever, no matter how far playback got.
+    OnResumeEffect(viewModel::refresh)
+
     val playButtonFocusRequester = remember { FocusRequester() }
     val firstChildFocusRequester = remember { FocusRequester() }
     val backButtonFocusRequester = remember { FocusRequester() }

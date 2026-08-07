@@ -34,6 +34,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
+import com.kolktech.kahawai.ui.components.OnResumeEffect
 import com.kolktech.kahawai.ui.components.PosterCard
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,6 +52,7 @@ fun LibraryScreen(
         factory = viewModelFactory { initializer { LibraryViewModel(repo, libraryId) } },
     )
     val state by viewModel.state.collectAsState()
+    OnResumeEffect(viewModel::refresh)
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
