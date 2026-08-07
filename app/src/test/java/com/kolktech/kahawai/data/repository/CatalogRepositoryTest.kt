@@ -27,7 +27,7 @@ class CatalogRepositoryTest {
     fun setUp() {
         server = MockWebServer()
         server.start()
-        repository = CatalogRepository(buildTestApiService(server))
+        repository = CatalogRepository({ buildTestApiService(server) })
     }
 
     @After
@@ -152,7 +152,7 @@ class CatalogRepositoryTest {
     @Test
     fun `artworkUrl composes query string from size and version`() {
         mockkObject(ApiClient)
-        every { ApiClient.baseUrl() } returns "http://hub.local/"
+        every { ApiClient.baseUrlOrNull() } returns "http://hub.local/"
         try {
             assertEquals(
                 "http://hub.local/api/v1/items/i1/artwork?size=thumb&v=42",

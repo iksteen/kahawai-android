@@ -37,7 +37,7 @@ class SearchViewModelTest {
         server.shutdown()
     }
 
-    private fun repo() = CatalogRepository(buildTestApiService(server))
+    private fun repo() = CatalogRepository({ buildTestApiService(server) })
 
     @Test
     fun `retry with a blank query resets to idle without a network call`() = runTest {

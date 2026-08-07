@@ -33,7 +33,7 @@ class LibraryViewModelTest {
         server.shutdown()
     }
 
-    private fun repo() = CatalogRepository(buildTestApiService(server))
+    private fun repo() = CatalogRepository({ buildTestApiService(server) })
 
     @Test
     fun `load succeeds and requests the given library`() = runTest {

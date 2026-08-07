@@ -56,7 +56,7 @@ class DetailViewModelTest {
         server.shutdown()
     }
 
-    private fun repo() = CatalogRepository(buildTestApiService(server))
+    private fun repo() = CatalogRepository({ buildTestApiService(server) })
     private fun vm(itemId: String = "item1") = DetailViewModel(application, repo(), itemId)
 
     @Test

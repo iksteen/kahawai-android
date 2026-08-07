@@ -33,7 +33,7 @@ class HomeViewModelTest {
         server.shutdown()
     }
 
-    private fun repo() = CatalogRepository(buildTestApiService(server))
+    private fun repo() = CatalogRepository({ buildTestApiService(server) })
 
     @Test
     fun `load succeeds and produces one row per non-empty library`() = runTest {
