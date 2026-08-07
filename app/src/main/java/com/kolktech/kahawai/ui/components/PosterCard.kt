@@ -114,6 +114,14 @@ fun PosterCard(
                     modifier = Modifier.size(14.dp),
                 )
             }
+            // Sits inside the clipped Box so the line follows the card's
+            // rounded bottom corners.
+            WatchProgressBar(
+                positionMs = item.resumePositionMs,
+                durationMs = item.resumeDurationMs,
+                played = item.played,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
         Text(
             item.title,

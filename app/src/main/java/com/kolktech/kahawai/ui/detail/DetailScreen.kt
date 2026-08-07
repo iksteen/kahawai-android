@@ -66,6 +66,7 @@ import com.kolktech.kahawai.data.network.dto.VideoStreamInfo
 import com.kolktech.kahawai.data.network.dto.displayLabel
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
+import com.kolktech.kahawai.ui.components.WatchProgressBar
 
 /// A thick, high-contrast ring around whatever holds D-pad focus. The
 /// default Material focus indication is nearly invisible from couch
@@ -195,16 +196,26 @@ private fun DetailContent(
         // the first row is reliably composed immediately instead of
         // being deferred below the fold.
         Row(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model = repo.artworkUrl(detail.id, detail.artVersion, "card"),
-                contentDescription = detail.title,
-                contentScale = ContentScale.Crop,
-                placeholder = painterResource(R.drawable.placeholder_poster),
-                error = painterResource(R.drawable.placeholder_poster),
+            Box(
                 modifier = Modifier
                     .fillMaxHeight()
                     .aspectRatio(2f / 3f),
-            )
+            ) {
+                AsyncImage(
+                    model = repo.artworkUrl(detail.id, detail.artVersion, "card"),
+                    contentDescription = detail.title,
+                    contentScale = ContentScale.Crop,
+                    placeholder = painterResource(R.drawable.placeholder_poster),
+                    error = painterResource(R.drawable.placeholder_poster),
+                    modifier = Modifier.fillMaxSize(),
+                )
+                WatchProgressBar(
+                    positionMs = detail.resumePositionMs,
+                    durationMs = detail.resumeDurationMs,
+                    played = detail.played,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
             LazyColumn(modifier = Modifier.weight(1f).fillMaxHeight().padding(16.dp)) {
                 item {
                     DetailInfo(
@@ -237,16 +248,26 @@ private fun DetailContent(
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             item {
                 Column {
-                    AsyncImage(
-                        model = repo.artworkUrl(detail.id, detail.artVersion),
-                        contentDescription = detail.title,
-                        contentScale = ContentScale.Crop,
-                        placeholder = painterResource(R.drawable.placeholder_poster),
-                        error = painterResource(R.drawable.placeholder_poster),
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(16f / 9f),
-                    )
+                    ) {
+                        AsyncImage(
+                            model = repo.artworkUrl(detail.id, detail.artVersion),
+                            contentDescription = detail.title,
+                            contentScale = ContentScale.Crop,
+                            placeholder = painterResource(R.drawable.placeholder_poster),
+                            error = painterResource(R.drawable.placeholder_poster),
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        WatchProgressBar(
+                            positionMs = detail.resumePositionMs,
+                            durationMs = detail.resumeDurationMs,
+                            played = detail.played,
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                        )
+                    }
                     Column(modifier = Modifier.padding(16.dp)) {
                         DetailInfo(
                             detail = detail,
