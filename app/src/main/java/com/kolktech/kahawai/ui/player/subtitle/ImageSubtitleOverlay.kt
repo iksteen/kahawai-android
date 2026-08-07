@@ -1,3 +1,5 @@
+@file:OptIn(UnstableApi::class)
+
 package com.kolktech.kahawai.ui.player.subtitle
 
 import android.graphics.Bitmap
@@ -6,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.Base64
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -20,6 +23,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack

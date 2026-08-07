@@ -1,3 +1,5 @@
+@file:OptIn(UnstableApi::class)
+
 package com.kolktech.kahawai.ui.player
 
 import android.app.Activity
@@ -22,6 +24,7 @@ import android.widget.ImageButton
 import android.widget.PopupMenu
 import android.widget.TextView
 import androidx.activity.compose.BackHandler
+import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -262,7 +265,6 @@ private const val SEEK_CHAIN_WINDOW_MS = 800L
 /// lone press only toggles the controls.
 private const val TV_BACK_EXIT_WINDOW_MS = 1_000L
 
-@OptIn(UnstableApi::class)
 @Composable
 private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     val context = LocalContext.current
@@ -750,12 +752,17 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
 
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
                     touchState.pinchScale *= detector.scaleFactor
+                    // Resolved off the attached PlayerView's own context
+                    // (mirrors menuContext elsewhere in this file) rather
+                    // than the Compose-tracked context above — this runs
+                    // from a native gesture callback, not recomposition.
+                    val viewContext = playerView?.context
                     if (touchState.pinchScale >= 1.2f && resizeModeIndex != 1) {
                         applyResize(1)
-                        flash(GestureIndicator.Resize(context.getString(R.string.zoomed_to_fill)))
+                        viewContext?.let { flash(GestureIndicator.Resize(it.getString(R.string.zoomed_to_fill))) }
                     } else if (touchState.pinchScale <= 0.8f && resizeModeIndex != 0) {
                         applyResize(0)
-                        flash(GestureIndicator.Resize(context.getString(RESIZE_MODES[0].second)))
+                        viewContext?.let { flash(GestureIndicator.Resize(it.getString(RESIZE_MODES[0].second))) }
                     }
                     return true
                 }
