@@ -8,7 +8,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.Format
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -18,21 +17,9 @@ import androidx.media3.common.Timeline
 import androidx.media3.common.Tracks
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
-import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.hls.playlist.DefaultHlsPlaylistTracker
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.source.MediaSource
-import androidx.media3.exoplayer.source.MergingMediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
-import androidx.media3.extractor.ExtractorsFactory
-import androidx.media3.extractor.text.DefaultSubtitleParserFactory
-import androidx.media3.extractor.text.SubtitleExtractor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -98,22 +85,6 @@ private const val PROGRESS_INTERVAL_MS = 10_000L
 
 private const val TAG = "PlayerViewModel"
 
-/// See PlayerViewModel.buildMediaSourceFactory. Media3's own default is
-/// 3.5 (DefaultHlsPlaylistTracker.DEFAULT_PLAYLIST_STUCK_TARGET_DURATION_COEFFICIENT).
-///
-/// A raised-but-still-finite coefficient (30.0, ~60s) was tried first and
-/// still failed on a seek far ahead — but the SAME hub, same seek, same
-/// content played correctly in the web client, which proves the hub's
-/// pipeline isn't the problem. web/src/views/Player.tsx's hls.js config
-/// doesn't give its analogous check a longer timeout either — it disables
-/// it outright: `liveMaxLatencyDurationCount: Infinity`. This mirrors
-/// that exactly rather than guessing at a bigger-but-still-wrong finite
-/// number a second time. (now - lastSnapshotChangeMs) > targetDurationMs
-/// * COEFFICIENT: multiplying by Double.MAX_VALUE overflows the right
-/// side to +Infinity under IEEE 754 (no crash, no NaN), and elapsed real
-/// time is never greater than infinity, so the check can never fire.
-private const val HLS_PLAYLIST_STUCK_COEFFICIENT = Double.MAX_VALUE
-
 /// Where to start the player and how to interpret [PlayerViewModel]'s
 /// running position, derived from the session mode the hub negotiated.
 /// "direct" mode serves the file's own timeline (a real seek to
@@ -141,6 +112,39 @@ internal fun resolveNextEpisode(
     val index = siblings.indexOfFirst { it.id == itemId }
     return if (index >= 0) siblings.getOrNull(index + 1)?.id else null
 }
+
+/// See [PlayerViewModel.syncOrigin]. [correctedOffsetMs] is the hub's
+/// keyframe-snapped origin (partBaseMs + the pipeline-local position it
+/// actually landed on); [inBounds] guards against applying it when it's
+/// wildly different from the optimistic offset already in use — a sign
+/// of reading the wrong session/a stale file, not a real keyframe snap.
+internal data class OriginCorrection(val correctedOffsetMs: Long, val inBounds: Boolean)
+
+internal fun computeOriginCorrection(
+    partBaseMs: Long?,
+    localMs: Long,
+    currentOffsetMs: Long,
+    boundMs: Long = 60_000,
+): OriginCorrection {
+    val corrected = (partBaseMs ?: 0) + localMs
+    val inBounds = kotlin.math.abs(corrected - currentOffsetMs) < boundMs
+    return OriginCorrection(correctedOffsetMs = corrected, inBounds = inBounds)
+}
+
+/// MergingMediaPeriod re-exposes every child source's formats with the id
+/// rewritten to "<childIndex>:<originalId>" (see
+/// [PlayerViewModel.applySubtitleTrackSelectionOverride]) — a sideloaded
+/// VTT config's id "1234" surfaces here as e.g. "1:1234", so matching must
+/// strip that prefix rather than compare exactly.
+internal fun matchesSideloadedTrackId(formatId: String?, wantedId: String): Boolean =
+    formatId?.substringAfterLast(':') == wantedId
+
+/// See [PlayerViewModel.textDeliverySubtitleConfigs]. shift_ms is negative
+/// offsetMs: the hub shifts the VTT's own cue timestamps to line up with
+/// the player's absolute position, which is offsetMs AHEAD of the file's
+/// local time — so cues must be shifted BACK by that amount.
+internal fun subtitleVttUrl(baseUrl: String, itemId: String, trackId: Long, offsetMs: Long): String =
+    "${baseUrl.trimEnd('/')}/api/v1/items/$itemId/subtitles/$trackId.vtt?shift_ms=${-offsetMs}"
 
 @OptIn(UnstableApi::class)
 class PlayerViewModel(
@@ -188,7 +192,7 @@ class PlayerViewModel(
             OkHttpDataSource.Factory(ApiClient.streamingOkHttpClient()),
         )
         ExoPlayer.Builder(getApplication())
-            .setMediaSourceFactory(buildMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(buildPlayerMediaSourceFactory(dataSourceFactory))
             // handleAudioFocus=true so ExoPlayer pauses itself on transient
             // audio focus loss (e.g. an incoming call ringing) and resumes
             // when focus is returned, without us wiring up an AudioManager
@@ -208,107 +212,6 @@ class PlayerViewModel(
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                     .build()
             }
-    }
-
-    /// Media3's default HLS playlist-stuck tolerance
-    /// (DefaultHlsPlaylistTracker.DEFAULT_PLAYLIST_STUCK_TARGET_DURATION_COEFFICIENT,
-    /// 3.5×) is tuned for a live encoder that's already running and just
-    /// pauses briefly — at the hub's 2s segment target-duration, that's
-    /// only ~7s before ExoPlayer gives up with a PlaylistStuckException.
-    /// A seek-restart here isn't a brief pause: the hub tears down and
-    /// restarts the WHOLE remux/transcode pipeline at a new position
-    /// first (confirmed by seeking far ahead in the field — the hub's
-    /// own seek accepted the request and reported a new part_base_ms,
-    /// but nothing had reached the playlist by the time ExoPlayer gave
-    /// up), which can legitimately take longer than 7s, especially
-    /// seeking deep into a large file. 30× (~60s here) gives the hub
-    /// realistic room to finish restarting while still eventually
-    /// failing loudly — surfacing as PlayerState.Error, not a silent
-    /// black screen — if something really is broken.
-    ///
-    /// DefaultMediaSourceFactory has no hook to reach into the HLS
-    /// delegate it builds internally, so this constructs the HLS branch
-    /// by hand and falls back to a plain DefaultMediaSourceFactory for
-    /// "direct" mode's progressive/byte-range files.
-    ///
-    /// DefaultMediaSourceFactory.createMediaSource() does two things for
-    /// any content type: builds the content MediaSource via whichever
-    /// delegate matches, THEN separately wraps each of MediaItem's own
-    /// sideloaded subtitleConfigurations (Text-delivery VTT — see
-    /// textDeliverySubtitleConfigs()) and merges them all with
-    /// MergingMediaSource. That merging step lives in
-    /// DefaultMediaSourceFactory itself, NOT in HlsMediaSource.Factory
-    /// — calling hlsFactory.createMediaSource(mediaItem) directly (as
-    /// this did before) skips it entirely, silently dropping every
-    /// Text-delivery subtitle track for remux/transcode sessions. Ass/
-    /// Overlay delivery is unaffected either way (out-of-band HTTP taps,
-    /// never routed through MediaItem at all), which is why this
-    /// regression was easy to miss.
-    ///
-    /// The wrapping MUST be the modern ProgressiveMediaSource +
-    /// SubtitleExtractor arrangement (what DefaultMediaSourceFactory
-    /// itself builds — confirmed by disassembling its 1.10.0
-    /// createMediaSource), NOT the legacy SingleSampleMediaSource this
-    /// used before: SingleSampleMediaSource delivers the raw VTT bytes
-    /// as one text/vtt sample, and Media3 1.10's TextRenderer ships
-    /// with legacy sample decoding DISABLED — selecting such a track
-    /// doesn't quietly show nothing, it throws ("Legacy decoding is
-    /// disabled, can't handle text/vtt samples") and takes the whole
-    /// playback down with it. SubtitleExtractor instead parses the VTT
-    /// at load time into application/x-media3-cues samples, the only
-    /// thing the renderer accepts.
-    private fun buildMediaSourceFactory(dataSourceFactory: DataSource.Factory): MediaSource.Factory {
-        val hlsFactory = HlsMediaSource.Factory(dataSourceFactory)
-            .setPlaylistTrackerFactory { dsFactory, errorPolicy, parserFactory, cmcdConfig, executor ->
-                DefaultHlsPlaylistTracker(dsFactory, errorPolicy, parserFactory, cmcdConfig, HLS_PLAYLIST_STUCK_COEFFICIENT, executor)
-            }
-        val subtitleParserFactory = DefaultSubtitleParserFactory()
-        val progressiveFactory = DefaultMediaSourceFactory(dataSourceFactory)
-        fun subtitleSource(config: MediaItem.SubtitleConfiguration): MediaSource {
-            val format = Format.Builder()
-                .setSampleMimeType(config.mimeType)
-                .setLanguage(config.language)
-                .setSelectionFlags(config.selectionFlags)
-                .setRoleFlags(config.roleFlags)
-                .setLabel(config.label)
-                .setId(config.id)
-                .build()
-            // Unlike DefaultMediaSourceFactory we can't defer the fetch
-            // until the track is selected (its lazy-single-track hook is
-            // package-private), so each sideloaded VTT is fetched at
-            // prepare() — they're small text files, an acceptable cost.
-            val extractorsFactory = ExtractorsFactory {
-                arrayOf(SubtitleExtractor(subtitleParserFactory.create(format), format))
-            }
-            return ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
-                .createMediaSource(MediaItem.fromUri(config.uri))
-        }
-        return object : MediaSource.Factory {
-            override fun createMediaSource(mediaItem: MediaItem): MediaSource {
-                if (mediaItem.localConfiguration?.mimeType != MimeTypes.APPLICATION_M3U8) {
-                    return progressiveFactory.createMediaSource(mediaItem)
-                }
-                val content = hlsFactory.createMediaSource(mediaItem)
-                val subtitleConfigs = mediaItem.localConfiguration?.subtitleConfigurations.orEmpty()
-                if (subtitleConfigs.isEmpty()) return content
-                val subtitleSources = subtitleConfigs.map { subtitleSource(it) }
-                return MergingMediaSource(content, *subtitleSources.toTypedArray())
-            }
-
-            override fun getSupportedTypes(): IntArray = intArrayOf(C.CONTENT_TYPE_HLS, C.CONTENT_TYPE_OTHER)
-
-            override fun setDrmSessionManagerProvider(drmSessionManagerProvider: DrmSessionManagerProvider): MediaSource.Factory {
-                hlsFactory.setDrmSessionManagerProvider(drmSessionManagerProvider)
-                progressiveFactory.setDrmSessionManagerProvider(drmSessionManagerProvider)
-                return this
-            }
-
-            override fun setLoadErrorHandlingPolicy(loadErrorHandlingPolicy: LoadErrorHandlingPolicy): MediaSource.Factory {
-                hlsFactory.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
-                progressiveFactory.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
-                return this
-            }
-        }
     }
 
     /// What the UI (PlayerView / its built-in controller) should hold.
@@ -426,38 +329,6 @@ class PlayerViewModel(
                 return DurationOverrideTimeline(real, total * 1000L)
             }
         }
-    }
-
-    /// See getCurrentTimeline() above. Timeline has no public
-    /// ForwardingTimeline helper in this Media3 version, but its surface
-    /// is small (six abstract methods) — plain delegation for
-    /// everything, with getWindow()/getPeriod() additionally overwriting
-    /// the delegate-populated durationUs before returning it.
-    private class DurationOverrideTimeline(
-        private val delegate: Timeline,
-        private val totalDurationUs: Long,
-    ) : Timeline() {
-        override fun getWindowCount(): Int = delegate.windowCount
-
-        override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
-            delegate.getWindow(windowIndex, window, defaultPositionProjectionUs)
-            window.durationUs = totalDurationUs
-            window.isSeekable = true
-            window.isDynamic = false
-            return window
-        }
-
-        override fun getPeriodCount(): Int = delegate.periodCount
-
-        override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
-            delegate.getPeriod(periodIndex, period, setIds)
-            period.durationUs = totalDurationUs
-            return period
-        }
-
-        override fun getIndexOfPeriod(uid: Any): Int = delegate.getIndexOfPeriod(uid)
-
-        override fun getUidOfPeriod(periodIndex: Int): Any = delegate.getUidOfPeriod(periodIndex)
     }
 
     private var session: StartSessionResponse? = null
@@ -771,13 +642,9 @@ class PlayerViewModel(
                 // and un-picking a burn can legitimately come back as a
                 // "direct" session, so both arrangements are reachable
                 // here.
-                if (newSession.mode == "direct") {
-                    offsetMs = 0
-                    attach(newSession, startPositionMs = positionMs, requestedAbsMs = positionMs)
-                } else {
-                    offsetMs = positionMs
-                    attach(newSession, startPositionMs = 0, requestedAbsMs = positionMs)
-                }
+                val plan = resumePlan(newSession.mode, positionMs)
+                offsetMs = plan.offsetMs
+                attach(newSession, startPositionMs = plan.startPositionMs, requestedAbsMs = positionMs)
                 if (oldSessionId != null && oldSessionId != newSession.sessionId) {
                     launch {
                         try {
@@ -980,18 +847,18 @@ class PlayerViewModel(
                             }
                     }
                     if (local != null) {
-                        val corrected = (session.partBaseMs ?: 0) + local
-                        val inBounds = kotlin.math.abs(corrected - offsetMs) < 60_000
+                        val correction = computeOriginCorrection(session.partBaseMs, local, offsetMs)
+                        val corrected = correction.correctedOffsetMs
                         Log.d(
                             TAG,
                             "syncOrigin epoch=$forEpoch attempt=$attempt local=$local " +
                                 "partBaseMs=${session.partBaseMs} optimisticOffsetMs=$optimisticOffsetMs " +
-                                "corrected=$corrected currentOffsetMs=$offsetMs inBounds=$inBounds",
+                                "corrected=$corrected currentOffsetMs=$offsetMs inBounds=${correction.inBounds}",
                         )
                         // Sanity-bounded like the web client: a wildly
                         // different value means we're reading the wrong
                         // session/a stale file, not a real keyframe snap.
-                        if (subtitleEpoch == forEpoch && corrected != offsetMs && inBounds) {
+                        if (subtitleEpoch == forEpoch && corrected != offsetMs && correction.inBounds) {
                             offsetMs = corrected
                             Log.d(TAG, "syncOrigin applied epoch=$forEpoch offsetMs=$corrected")
                             if (_selectedSubtitleTrack.value?.delivery == "text") {
@@ -1046,7 +913,7 @@ class PlayerViewModel(
         _subtitleTracks.value
             .filter { it.delivery == "text" }
             .map { track ->
-                val vttUrl = "${ApiClient.baseUrl().trimEnd('/')}/api/v1/items/$itemId/subtitles/${track.id}.vtt?shift_ms=${-offsetMs}"
+                val vttUrl = subtitleVttUrl(ApiClient.baseUrl(), itemId, track.id, offsetMs)
                 MediaItem.SubtitleConfiguration.Builder(Uri.parse(vttUrl))
                     .setMimeType(MimeTypes.TEXT_VTT)
                     .setLanguage(track.language)
@@ -1075,8 +942,7 @@ class PlayerViewModel(
             // is one of ours and suffix matching is unambiguous.
             val wantedId = track.id.toString()
             val group = realPlayer.currentTracks.groups.firstOrNull {
-                it.type == C.TRACK_TYPE_TEXT &&
-                    it.mediaTrackGroup.getFormat(0).id?.substringAfterLast(':') == wantedId
+                it.type == C.TRACK_TYPE_TEXT && matchesSideloadedTrackId(it.mediaTrackGroup.getFormat(0).id, wantedId)
             }
             // Log.i, not Log.d: the vivo test device suppresses D-level
             // logcat output entirely, and this is the one line that says
