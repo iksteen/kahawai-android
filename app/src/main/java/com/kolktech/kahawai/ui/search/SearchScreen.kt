@@ -39,10 +39,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
 import com.kolktech.kahawai.ui.components.OnResumeEffect
@@ -75,16 +77,17 @@ fun SearchScreen(
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
+    val voiceUnavailableMessage = stringResource(R.string.search_voice_unavailable)
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Search") },
+                title = { Text(stringResource(R.string.search)) },
                 navigationIcon = {
                     IconButton(
                         onClick = onBack,
                         modifier = Modifier.focusRequester(backFocusRequester),
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kw_back))
                     }
                 },
             )
@@ -94,7 +97,7 @@ fun SearchScreen(
             OutlinedTextField(
                 value = query,
                 onValueChange = viewModel::onQueryChange,
-                label = { Text("Search") },
+                label = { Text(stringResource(R.string.search)) },
                 singleLine = true,
                 trailingIcon = {
                     IconButton(onClick = {
@@ -105,10 +108,10 @@ fun SearchScreen(
                         try {
                             voiceLauncher.launch(intent)
                         } catch (e: ActivityNotFoundException) {
-                            Toast.makeText(context, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, voiceUnavailableMessage, Toast.LENGTH_SHORT).show()
                         }
                     }) {
-                        Icon(Icons.Filled.Mic, contentDescription = "Voice search")
+                        Icon(Icons.Filled.Mic, contentDescription = stringResource(R.string.search_voice))
                     }
                 },
                 modifier = Modifier
@@ -123,7 +126,7 @@ fun SearchScreen(
             )
             when (val s = state) {
                 is SearchState.Idle -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Search across your libraries", style = MaterialTheme.typography.bodyMedium)
+                    Text(stringResource(R.string.search_hint), style = MaterialTheme.typography.bodyMedium)
                 }
                 is SearchState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
@@ -137,7 +140,7 @@ fun SearchScreen(
                 is SearchState.Loaded -> {
                     if (s.items.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No matches for “$query”.")
+                            Text(stringResource(R.string.search_no_matches, query))
                         }
                     } else {
                         LazyVerticalGrid(

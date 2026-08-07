@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
@@ -170,7 +171,7 @@ fun DetailScreen(
         ) {
             Icon(
                 Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.kw_back),
                 modifier = Modifier.padding(10.dp),
                 tint = Color.White,
             )
@@ -376,21 +377,21 @@ private fun DetailInfo(
                 onClick = { onPlay(detail.id, resumeMs, selectedAudioTrackIndex, selectedSubtitleTrack?.id) },
                 modifier = Modifier.focusRequester(playButtonFocusRequester).dpadFocusBorder(),
             ) {
-                Text(if (resumeMs > 0) "Resume" else "Play")
+                Text(stringResource(if (resumeMs > 0) R.string.detail_resume else R.string.detail_play))
             }
             if (resumeMs > 0) {
                 OutlinedButton(
                     onClick = { onPlay(detail.id, 0, selectedAudioTrackIndex, selectedSubtitleTrack?.id) },
                     modifier = Modifier.dpadFocusBorder(),
                 ) {
-                    Text("Start over")
+                    Text(stringResource(R.string.detail_start_over))
                 }
             }
         }
 
         if (audioTracks.size > 1) {
             TrackPicker(
-                title = "Audio",
+                title = stringResource(R.string.audio),
                 modifier = Modifier.padding(top = 16.dp),
             ) {
                 audioTracks.forEachIndexed { index, track ->
@@ -434,26 +435,27 @@ private fun SubtitlePicker(
     modifier: Modifier = Modifier,
 ) {
     var showPicker by remember { mutableStateOf(false) }
+    val offLabel = stringResource(R.string.subtitle_off)
     Column(modifier = modifier) {
-        Text("Subtitles", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
+        Text(stringResource(R.string.subtitles), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
         OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth().dpadFocusBorder()) {
-            Text(selected?.displayLabel() ?: "Off", modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+            Text(selected?.displayLabel() ?: offLabel, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
         }
     }
     if (showPicker) {
         AlertDialog(
             onDismissRequest = { showPicker = false },
             confirmButton = {
-                TextButton(onClick = { showPicker = false }) { Text("Close") }
+                TextButton(onClick = { showPicker = false }) { Text(stringResource(R.string.detail_subtitles_close)) }
             },
-            title = { Text("Subtitles") },
+            title = { Text(stringResource(R.string.subtitles)) },
             text = {
                 // A capped height so the popup itself stays small and
                 // scrolls, instead of growing to fit every track.
                 LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
                     item {
                         SelectableRow(
-                            text = "Off",
+                            text = offLabel,
                             selected = selected == null,
                             onClick = { onSelect(null); showPicker = false },
                         )
@@ -502,11 +504,16 @@ private fun SelectableRow(text: String, selected: Boolean, enabled: Boolean = tr
     }
 }
 
+@Composable
 private fun formatRuntime(ms: Long): String {
     val totalMinutes = ms / 60_000
     val hours = totalMinutes / 60
     val minutes = totalMinutes % 60
-    return if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
+    return if (hours > 0) {
+        stringResource(R.string.runtime_hours_minutes, hours, minutes)
+    } else {
+        stringResource(R.string.runtime_minutes, minutes)
+    }
 }
 
 private fun VideoStreamInfo.resolutionLabel(): String = when {
@@ -518,10 +525,11 @@ private fun VideoStreamInfo.resolutionLabel(): String = when {
     else -> ""
 }
 
+@Composable
 private fun AudioStreamInfo.displayLabel(): String {
     val channelLabel = when (channels) {
-        1 -> "Mono"
-        2 -> "Stereo"
+        1 -> stringResource(R.string.channels_mono)
+        2 -> stringResource(R.string.channels_stereo)
         6 -> "5.1"
         8 -> "7.1"
         0 -> null
@@ -535,13 +543,13 @@ private fun ResumeLine(detail: ItemDetail) {
     val resumeMs = detail.resumePositionMs
     val durationMs = detail.resumeDurationMs
     val text = when {
-        detail.played -> "Watched"
+        detail.played -> stringResource(R.string.watched)
         resumeMs != null && resumeMs > 0 -> {
             val minutes = resumeMs / 60_000
-            "Resume at ${minutes}m" + if (durationMs != null && durationMs > 0) {
-                " (${(resumeMs * 100 / durationMs)}%)"
+            if (durationMs != null && durationMs > 0) {
+                stringResource(R.string.resume_at_percent, minutes, resumeMs * 100 / durationMs)
             } else {
-                ""
+                stringResource(R.string.resume_at, minutes)
             }
         }
         else -> null
@@ -586,7 +594,7 @@ private fun ChildRow(child: Item, onOpenItem: (String) -> Unit, focusRequester: 
         Text(label, style = MaterialTheme.typography.bodyLarge)
         if (child.playCount > 0 || child.played) {
             Text(
-                "Watched",
+                stringResource(R.string.watched),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
             )

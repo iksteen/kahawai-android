@@ -1,12 +1,14 @@
 package com.kolktech.kahawai.ui.admin
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.AdminLibrary
 import com.kolktech.kahawai.data.network.dto.AdminSession
 import com.kolktech.kahawai.data.network.dto.CollectionInfo
@@ -39,7 +41,13 @@ sealed interface AdminState {
 /// sessions. Polling only (no SSE `/api/v1/events` channel — see the plan
 /// this was built from), same 15s interval the web client uses as its own
 /// fallback.
-class AdminViewModel(private val repo: AdminRepository = AdminRepository()) : ViewModel() {
+class AdminViewModel(
+    application: Application,
+    private val repo: AdminRepository = AdminRepository(),
+) : AndroidViewModel(application) {
+    private fun string(resId: Int): String = getApplication<Application>().getString(resId)
+    private fun string(resId: Int, vararg args: Any): String = getApplication<Application>().getString(resId, *args)
+
     private val _state = MutableStateFlow<AdminState>(AdminState.Loading)
     val state: StateFlow<AdminState> = _state
 
@@ -66,12 +74,12 @@ class AdminViewModel(private val repo: AdminRepository = AdminRepository()) : Vi
 
     fun approve(code: String) = runAction {
         val id = repo.approve(code)
-        notice("Approved: $id")
+        notice(string(R.string.admin_notice_approved, id))
     }
 
     fun deleteSatellite(id: String) = runAction {
         repo.deleteSatellite(id)
-        notice("Deleted $id: certificate revoked, collections removed.")
+        notice(string(R.string.admin_notice_deleted, id))
     }
 
     fun setSatelliteDisabled(id: String, disabled: Boolean) = runAction {
@@ -92,24 +100,27 @@ class AdminViewModel(private val repo: AdminRepository = AdminRepository()) : Vi
 
     fun refreshLibrary(id: String) = runAction {
         val r = repo.refreshLibrary(id)
-        notice("Refresh requested: ${r.asked} collection(s)" + if (r.offline > 0) ", ${r.offline} offline" else "")
+        notice(
+            string(R.string.admin_notice_refresh, r.asked) +
+                if (r.offline > 0) string(R.string.admin_notice_refresh_offline_suffix, r.offline) else "",
+        )
     }
 
     fun setTmdbKey(key: String) = runAction {
         repo.setTmdbKey(key)
-        notice("TMDB key saved — enrichment started")
+        notice(string(R.string.admin_notice_tmdb_saved))
     }
 
     fun setTvdbKey(key: String, pin: String?) = runAction {
         repo.setTvdbKey(key, pin)
-        notice("TVDB key saved — enrichment started")
+        notice(string(R.string.admin_notice_tvdb_saved))
     }
 
     fun setAnidb(username: String, password: String, udpApiKey: String?) = runAction {
         val r = repo.setAnidb(username, password, udpApiKey)
         notice(
-            if (r.verified) "AniDB account verified — enrichment started"
-            else "AniDB saved but login failed: ${r.error ?: "unknown"}",
+            if (r.verified) string(R.string.admin_notice_anidb_verified)
+            else string(R.string.admin_notice_anidb_failed, r.error ?: string(R.string.unknown)),
         )
     }
 
@@ -117,7 +128,7 @@ class AdminViewModel(private val repo: AdminRepository = AdminRepository()) : Vi
 
     fun setChain(mediaType: String, order: List<String>) = runAction {
         repo.setChain(mediaType, order)
-        notice("$mediaType: provider order applied — metadata re-merged")
+        notice(string(R.string.admin_notice_chain_applied, mediaType))
     }
 
     fun endSession(id: String) = runAction { repo.endSession(id) }
@@ -132,7 +143,7 @@ class AdminViewModel(private val repo: AdminRepository = AdminRepository()) : Vi
                 block()
                 reload()
             } catch (e: Exception) {
-                _notice.value = "Error: ${e.readableMessage()}"
+                _notice.value = string(R.string.admin_notice_error, e.readableMessage())
             }
         }
     }

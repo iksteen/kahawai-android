@@ -2,4 +2,163 @@
 <resources>
     <string name="app_name">Kahawai</string>
     <string name="kw_back">Back</string>
+
+    <!-- Shared across multiple screens -->
+    <string name="search">Search</string>
+    <string name="save">Save</string>
+    <string name="default_label">Default</string>
+    <string name="subtitle_off">Off</string>
+    <string name="subtitles">Subtitles</string>
+    <string name="audio">Audio</string>
+    <string name="watched">Watched</string>
+    <string name="delete">Delete</string>
+    <string name="refresh">Refresh</string>
+    <string name="create">Create</string>
+    <string name="approve">Approve</string>
+    <string name="apply">Apply</string>
+    <string name="reset">Reset</string>
+    <string name="enable">Enable</string>
+    <string name="disable">Disable</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="username">Username</string>
+    <string name="password">Password</string>
+    <string name="move_up">Move up</string>
+    <string name="move_down">Move down</string>
+    <!-- "1. Provider name" style ordered-list rows (provider chains, ASS fallback order) -->
+    <string name="numbered_item">%1$d. %2$s</string>
+    <string name="unknown">unknown</string>
+    <string name="end">End</string>
+
+    <!-- Home -->
+    <string name="home_menu">Menu</string>
+    <string name="home_app_settings">App settings</string>
+    <string name="home_server_settings">Server settings</string>
+    <string name="home_admin">Admin</string>
+    <string name="home_log_out">Log out</string>
+    <string name="home_no_libraries">No libraries yet. Connect a mediahost to the hub.</string>
+    <string name="home_see_all">see all (%1$d)</string>
+
+    <!-- Search -->
+    <string name="search_voice">Voice search</string>
+    <string name="search_voice_unavailable">Voice input isn\'t available on this device</string>
+    <string name="search_hint">Search across your libraries</string>
+    <string name="search_no_matches">No matches for “%1$s”.</string>
+
+    <!-- Detail -->
+    <string name="detail_start_over">Start over</string>
+    <string name="detail_resume">Resume</string>
+    <string name="detail_play">Play</string>
+    <string name="detail_subtitles_close">Close</string>
+    <string name="resume_at">Resume at %1$dm</string>
+    <string name="resume_at_percent">Resume at %1$dm (%2$d%%)</string>
+    <string name="runtime_hours_minutes">%1$dh %2$dm</string>
+    <string name="runtime_minutes">%1$dm</string>
+    <string name="channels_mono">Mono</string>
+    <string name="channels_stereo">Stereo</string>
+
+    <!-- ErrorView -->
+    <string name="error_sign_in_again">Sign in again</string>
+    <string name="error_retry">Retry</string>
+
+    <!-- Login -->
+    <string name="login_sign_in">Sign in</string>
+    <string name="login_cancel_setup">Cancel server setup</string>
+    <string name="login_setup_prompt">Setting up a new server?</string>
+    <string name="login_setup_token">Setup token</string>
+    <string name="login_setup_token_placeholder">XXXX-XXXX</string>
+    <string name="login_create_admin">Create admin account</string>
+    <string name="login_enter_username_password">Enter a username and password</string>
+    <string name="login_failed">Login failed: %1$s</string>
+    <string name="login_enter_setup_fields">Enter the setup token, a username, and a password</string>
+    <string name="login_setup_failed">Setup failed: %1$s</string>
+
+    <!-- Server setup (first connection) -->
+    <string name="setup_title">Connect to your kahawai hub</string>
+    <string name="setup_hint">e.g. 192.168.1.20:8420 or https://kahawai.example.com</string>
+    <string name="setup_hub_address">Hub address</string>
+    <string name="setup_continue">Continue</string>
+    <string name="setup_enter_address">Enter your hub\'s address</string>
+    <string name="setup_invalid_address">That doesn\'t look like a valid http:// or https:// address</string>
+    <string name="setup_unreachable">Couldn\'t reach %1$s: %2$s</string>
+
+    <!-- App settings -->
+    <string name="app_settings_title">App settings</string>
+    <string name="app_settings_hub_server">Hub server</string>
+    <string name="app_settings_not_configured">not configured</string>
+    <string name="app_settings_change_server">Change server</string>
+    <string name="app_settings_about">About</string>
+    <string name="app_settings_version">kahawai %1$s</string>
+
+    <!-- Server (per-user hub) settings -->
+    <string name="server_settings_title">Server settings</string>
+    <string name="server_settings_opensubtitles">OpenSubtitles</string>
+    <string name="server_settings_opensubtitles_desc">Attach your own opensubtitles.com account to use your own download budget instead of the shared one.</string>
+    <string name="settings_password_saved">Password (saved — enter to replace)</string>
+    <string name="server_settings_playback">Playback</string>
+    <string name="server_settings_bandwidth">Bandwidth cap (kbit/s, blank = none)</string>
+    <string name="server_settings_ass_fallback_desc">Styled subtitle fallback — first rung this client and fleet can serve wins</string>
+    <string name="server_settings_audio_hint">Audio (e.g. original,en,ja)</string>
+    <string name="server_settings_subs_hint">Subtitles (e.g. en,nl)</string>
+
+    <!-- Admin -->
+    <string name="admin_title">Admin</string>
+    <string name="admin_metadata_providers">Metadata providers</string>
+    <string name="admin_tmdb_key_configured">TMDB key (configured — replace)</string>
+    <string name="admin_tmdb_key">TMDB API key</string>
+    <string name="admin_enriching">Enriching…</string>
+    <string name="admin_enrich_now">Enrich now</string>
+    <string name="admin_enrich_stats">%1$d matched · %2$d weak · %3$d missed</string>
+    <string name="admin_tvdb_key_configured">TVDB key (configured — replace)</string>
+    <string name="admin_tvdb_key">TVDB API key</string>
+    <string name="admin_pin">PIN</string>
+    <string name="admin_anidb_username_configured">AniDB username (configured — replace)</string>
+    <string name="admin_anidb_username">AniDB username</string>
+    <string name="admin_anidb_password">AniDB password</string>
+    <string name="admin_anidb_udp_key">UDP API key (optional)</string>
+    <string name="higher_precedence">Higher precedence</string>
+    <string name="lower_precedence">Lower precedence</string>
+    <string name="admin_pending_enrollments">Pending enrollments</string>
+    <string name="admin_no_pending">None. A new satellite prints its code on its console when it first starts.</string>
+    <string name="admin_pending_item">%1$s · %2$s · %3$s</string>
+    <string name="admin_enrollment_code">Enrollment code (XXXX-XXXX)</string>
+    <string name="admin_satellites">Satellites</string>
+    <string name="admin_no_satellites">No satellites enrolled.</string>
+    <string name="online">online</string>
+    <string name="offline">offline</string>
+    <string name="disabled">disabled</string>
+    <string name="confirm_delete_revoke">Really delete + revoke?</string>
+    <string name="admin_libraries">Libraries</string>
+    <string name="admin_new_library_name">New library name</string>
+    <string name="admin_attach">attach…</string>
+    <string name="admin_offline_suffix"> (offline)</string>
+    <string name="admin_scanned">scanned</string>
+    <string name="admin_scanning">scanning</string>
+    <string name="admin_active_sessions">Active sessions</string>
+    <string name="admin_no_sessions">Nobody is streaming.</string>
+    <string name="admin_notice_approved">Approved: %1$s</string>
+    <string name="admin_notice_deleted">Deleted %1$s: certificate revoked, collections removed.</string>
+    <string name="admin_notice_refresh">Refresh requested: %1$d collection(s)</string>
+    <string name="admin_notice_refresh_offline_suffix">, %1$d offline</string>
+    <string name="admin_notice_tmdb_saved">TMDB key saved — enrichment started</string>
+    <string name="admin_notice_tvdb_saved">TVDB key saved — enrichment started</string>
+    <string name="admin_notice_anidb_verified">AniDB account verified — enrichment started</string>
+    <string name="admin_notice_anidb_failed">AniDB saved but login failed: %1$s</string>
+    <string name="admin_notice_chain_applied">%1$s: provider order applied — metadata re-merged</string>
+    <string name="admin_notice_error">Error: %1$s</string>
+
+    <!-- Player -->
+    <string name="resize_fit">Fit</string>
+    <string name="resize_crop">Crop</string>
+    <string name="resize_stretch">Stretch</string>
+    <string name="zoomed_to_fill">Zoomed to fill</string>
+    <string name="player_settings_video">Video: %1$s</string>
+    <string name="player_settings_speed">Speed: %1$s</string>
+    <string name="player_settings_audio">Audio: %1$s</string>
+    <string name="brightness_percent">Brightness %1$d%%</string>
+    <string name="volume_percent">Volume %1$d%%</string>
+    <string name="seek_forward">%1$ss ⏩</string>
+    <string name="seek_backward">⏪ %1$ss</string>
+    <string name="player_playback_failed">Playback failed: %1$s</string>
+    <string name="player_seek_failed">Seek failed: %1$s</string>
+    <string name="player_subtitle_switch_failed">Failed to switch subtitle: %1$s</string>
 </resources>

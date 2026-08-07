@@ -1,5 +1,6 @@
 package com.kolktech.kahawai.ui.login
 
+import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +23,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -31,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.auth.TokenStore
 
 @Composable
@@ -38,8 +42,9 @@ fun LoginScreen(
     tokenStore: TokenStore,
     onLoggedIn: () -> Unit,
 ) {
+    val application = LocalContext.current.applicationContext as Application
     val viewModel: LoginViewModel = viewModel(
-        factory = viewModelFactory { initializer { LoginViewModel(tokenStore) } },
+        factory = viewModelFactory { initializer { LoginViewModel(application, tokenStore) } },
     )
     val state by viewModel.state.collectAsState()
     var username by remember { mutableStateOf("") }
@@ -59,11 +64,11 @@ fun LoginScreen(
             .padding(32.dp),
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("Sign in", style = MaterialTheme.typography.headlineSmall)
+        Text(stringResource(R.string.login_sign_in), style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text("Username") },
+            label = { Text(stringResource(R.string.username)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
             modifier = Modifier
@@ -74,7 +79,7 @@ fun LoginScreen(
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("Password") },
+            label = { Text(stringResource(R.string.password)) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             // KeyboardType.Password keeps the IME from learning/suggesting
@@ -90,14 +95,14 @@ fun LoginScreen(
             onClick = { showSetupKey = !showSetupKey },
             modifier = Modifier.padding(top = 4.dp),
         ) {
-            Text(if (showSetupKey) "Cancel server setup" else "Setting up a new server?")
+            Text(stringResource(if (showSetupKey) R.string.login_cancel_setup else R.string.login_setup_prompt))
         }
         if (showSetupKey) {
             OutlinedTextField(
                 value = setupToken,
                 onValueChange = { setupToken = it },
-                label = { Text("Setup token") },
-                placeholder = { Text("XXXX-XXXX") },
+                label = { Text(stringResource(R.string.login_setup_token)) },
+                placeholder = { Text(stringResource(R.string.login_setup_token_placeholder)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 modifier = Modifier.fillMaxWidth(),
@@ -126,7 +131,7 @@ fun LoginScreen(
             if (state is LoginState.Loading) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp))
             } else {
-                Text(if (showSetupKey) "Create admin account" else "Sign in")
+                Text(stringResource(if (showSetupKey) R.string.login_create_admin else R.string.login_sign_in))
             }
         }
     }

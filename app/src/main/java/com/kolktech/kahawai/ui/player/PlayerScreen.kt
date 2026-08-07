@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
@@ -84,10 +85,13 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+// Labels are @StringRes ids, not resolved strings — this is a top-level
+// property (evaluated once at class-load, outside any Composable/Context),
+// so resolution happens at each call site via context.getString/menuContext.getString.
 private val RESIZE_MODES = listOf(
-    AspectRatioFrameLayout.RESIZE_MODE_FIT to "Fit",
-    AspectRatioFrameLayout.RESIZE_MODE_ZOOM to "Crop",
-    AspectRatioFrameLayout.RESIZE_MODE_FILL to "Stretch",
+    AspectRatioFrameLayout.RESIZE_MODE_FIT to R.string.resize_fit,
+    AspectRatioFrameLayout.RESIZE_MODE_ZOOM to R.string.resize_crop,
+    AspectRatioFrameLayout.RESIZE_MODE_FILL to R.string.resize_stretch,
 )
 
 private val PLAYBACK_SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
@@ -204,7 +208,7 @@ fun PlayerScreen(
             ) {
                 Text(s.message, color = MaterialTheme.colorScheme.error)
                 Button(onClick = closeAndPause, modifier = Modifier.padding(top = 12.dp)) {
-                    Text("Back")
+                    Text(stringResource(R.string.kw_back))
                 }
             }
             is PlayerState.Ready -> PlayerContent(viewModel, closeAndPause)
@@ -461,7 +465,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             val selectionForItem = mutableMapOf<Int, Pair<TrackGroup, Int>?>()
             var itemId = 0
             var checkedItemId = if (hasAudioOverride) -1 else 0
-            menu.add(0, itemId, itemId, "Default")
+            menu.add(0, itemId, itemId, menuContext.getString(R.string.default_label))
             selectionForItem[itemId] = null
             itemId++
             groups.forEach { group ->
@@ -498,7 +502,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             val trackForItem = mutableMapOf<Int, SubtitleTrack?>()
             var itemId = 0
             var checkedItemId = if (selected == null) 0 else -1
-            menu.add(0, itemId, itemId, "Off")
+            menu.add(0, itemId, itemId, menuContext.getString(R.string.subtitle_off))
             trackForItem[itemId] = null
             itemId++
             tracks.forEach { track ->
@@ -524,12 +528,12 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
 
     fun showResizeMenu(menuContext: Context, anchor: View) {
         PopupMenu(menuContext, anchor).apply {
-            RESIZE_MODES.forEachIndexed { index, (_, label) -> menu.add(0, index, index, label) }
+            RESIZE_MODES.forEachIndexed { index, (_, labelRes) -> menu.add(0, index, index, menuContext.getString(labelRes)) }
             menu.setGroupCheckable(0, true, true)
             menu.findItem(resizeModeIndex)?.isChecked = true
             setOnMenuItemClickListener { item ->
                 applyResize(item.itemId)
-                flash(GestureIndicator.Resize(RESIZE_MODES[item.itemId].second))
+                flash(GestureIndicator.Resize(menuContext.getString(RESIZE_MODES[item.itemId].second)))
                 true
             }
         }.show()
@@ -565,9 +569,16 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                 ?.let { nameProvider.getTrackName(group.getTrackFormat(it)) }
         }
         PopupMenu(menuContext, anchor).apply {
-            menu.add(0, 0, 0, "Video: ${RESIZE_MODES[resizeModeIndex].second}")
-            menu.add(0, 1, 1, "Speed: ${speed}x")
-            if (audioGroups.isNotEmpty()) menu.add(0, 2, 2, "Audio: ${currentAudio ?: "Default"}")
+            menu.add(0, 0, 0, menuContext.getString(R.string.player_settings_video, menuContext.getString(RESIZE_MODES[resizeModeIndex].second)))
+            menu.add(0, 1, 1, menuContext.getString(R.string.player_settings_speed, "${speed}x"))
+            if (audioGroups.isNotEmpty()) {
+                menu.add(
+                    0,
+                    2,
+                    2,
+                    menuContext.getString(R.string.player_settings_audio, currentAudio ?: menuContext.getString(R.string.default_label)),
+                )
+            }
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     0 -> showResizeMenu(menuContext, anchor)
@@ -741,10 +752,10 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                     touchState.pinchScale *= detector.scaleFactor
                     if (touchState.pinchScale >= 1.2f && resizeModeIndex != 1) {
                         applyResize(1)
-                        flash(GestureIndicator.Resize("Zoomed to fill"))
+                        flash(GestureIndicator.Resize(context.getString(R.string.zoomed_to_fill)))
                     } else if (touchState.pinchScale <= 0.8f && resizeModeIndex != 0) {
                         applyResize(0)
-                        flash(GestureIndicator.Resize("Fit"))
+                        flash(GestureIndicator.Resize(context.getString(RESIZE_MODES[0].second)))
                     }
                     return true
                 }
@@ -868,11 +879,11 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
         // that should render there.
         indicator?.takeIf { !isInPip }?.let { current ->
             val label = when (current) {
-                is GestureIndicator.Brightness -> "Brightness ${(current.value * 100).roundToInt()}%"
-                is GestureIndicator.Volume -> "Volume ${(current.value * 100).roundToInt()}%"
+                is GestureIndicator.Brightness -> stringResource(R.string.brightness_percent, (current.value * 100).roundToInt())
+                is GestureIndicator.Volume -> stringResource(R.string.volume_percent, (current.value * 100).roundToInt())
                 is GestureIndicator.Seek -> {
                     val secs = if (current.seconds % 1f == 0f) current.seconds.toInt().toString() else current.seconds.toString()
-                    if (current.forward) "${secs}s ⏩" else "⏪ ${secs}s"
+                    stringResource(if (current.forward) R.string.seek_forward else R.string.seek_backward, secs)
                 }
                 is GestureIndicator.Resize -> current.label
             }

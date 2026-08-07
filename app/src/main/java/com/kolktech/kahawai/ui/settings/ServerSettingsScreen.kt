@@ -36,11 +36,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.ui.components.ErrorView
 
 private val MEDIA_TYPES = listOf("movies", "series", "anime")
@@ -66,10 +68,10 @@ fun ServerSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Server settings") },
+                title = { Text(stringResource(R.string.server_settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kw_back))
                     }
                 },
             )
@@ -119,23 +121,23 @@ private fun OpenSubtitlesSection(values: Map<String, String>, viewModel: ServerS
     var password by remember { mutableStateOf("") }
     val hasPassword = values.containsKey("opensubtitles.password")
 
-    SectionTitle("OpenSubtitles")
+    SectionTitle(stringResource(R.string.server_settings_opensubtitles))
     Text(
-        "Attach your own opensubtitles.com account to use your own download budget instead of the shared one.",
+        stringResource(R.string.server_settings_opensubtitles_desc),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     OutlinedTextField(
         value = username,
         onValueChange = { username = it },
-        label = { Text("Username") },
+        label = { Text(stringResource(R.string.username)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
     )
     OutlinedTextField(
         value = password,
         onValueChange = { password = it },
-        label = { Text(if (hasPassword) "Password (saved — enter to replace)" else "Password") },
+        label = { Text(stringResource(if (hasPassword) R.string.settings_password_saved else R.string.password)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
     )
@@ -143,12 +145,12 @@ private fun OpenSubtitlesSection(values: Map<String, String>, viewModel: ServerS
         Button(
             onClick = { viewModel.saveOpenSubtitles(username.trim(), password.trim()) { password = "" } },
             enabled = username.isNotBlank() && password.isNotBlank(),
-        ) { Text("Save") }
+        ) { Text(stringResource(R.string.save)) }
         if (username.isNotEmpty() || hasPassword) {
             OutlinedButton(
                 onClick = { username = ""; viewModel.saveOpenSubtitles("", "") },
                 modifier = Modifier.padding(start = 8.dp),
-            ) { Text("Disconnect") }
+            ) { Text(stringResource(R.string.disconnect)) }
         }
     }
 }
@@ -159,12 +161,12 @@ private fun PlaybackSection(values: Map<String, String>, viewModel: ServerSettin
         mutableStateOf(values["bandwidth_kbps"].orEmpty())
     }
 
-    SectionTitle("Playback")
+    SectionTitle(stringResource(R.string.server_settings_playback))
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = bandwidth,
             onValueChange = { bandwidth = it.filter(Char::isDigit) },
-            label = { Text("Bandwidth cap (kbit/s, blank = none)") },
+            label = { Text(stringResource(R.string.server_settings_bandwidth)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.weight(1f),
@@ -172,11 +174,11 @@ private fun PlaybackSection(values: Map<String, String>, viewModel: ServerSettin
         Button(
             onClick = { viewModel.setPref("bandwidth_kbps", if (bandwidth == "0") "" else bandwidth) },
             modifier = Modifier.padding(start = 8.dp),
-        ) { Text("Save") }
+        ) { Text(stringResource(R.string.save)) }
     }
 
     Text(
-        "Styled subtitle fallback — first rung this client and fleet can serve wins",
+        stringResource(R.string.server_settings_ass_fallback_desc),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
@@ -184,7 +186,7 @@ private fun PlaybackSection(values: Map<String, String>, viewModel: ServerSettin
     val order = remember(values["ass_order"]) { assOrder(values["ass_order"]) }
     order.forEachIndexed { index, rung ->
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("${index + 1}. $rung", modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.numbered_item, index + 1, rung), modifier = Modifier.weight(1f))
             IconButton(
                 enabled = index > 0,
                 onClick = {
@@ -193,7 +195,7 @@ private fun PlaybackSection(values: Map<String, String>, viewModel: ServerSettin
                     next[index - 1] = rung
                     viewModel.setPref("ass_order", next.joinToString(","))
                 },
-            ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up") }
+            ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.move_up)) }
             IconButton(
                 enabled = index < order.size - 1,
                 onClick = {
@@ -202,7 +204,7 @@ private fun PlaybackSection(values: Map<String, String>, viewModel: ServerSettin
                     next[index + 1] = rung
                     viewModel.setPref("ass_order", next.joinToString(","))
                 },
-            ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down") }
+            ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.move_down)) }
         }
     }
 }
@@ -229,27 +231,27 @@ private fun MediaTypeSection(mediaType: String, values: Map<String, String>, vie
         OutlinedTextField(
             value = audio,
             onValueChange = { audio = it },
-            label = { Text("Audio (e.g. original,en,ja)") },
+            label = { Text(stringResource(R.string.server_settings_audio_hint)) },
             singleLine = true,
             modifier = Modifier.weight(1f),
         )
         Button(
             onClick = { viewModel.setPref("audio.$mediaType", audio.trim()) },
             modifier = Modifier.padding(start = 8.dp),
-        ) { Text("Save") }
+        ) { Text(stringResource(R.string.save)) }
     }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
         OutlinedTextField(
             value = subs,
             onValueChange = { subs = it },
-            label = { Text("Subtitles (e.g. en,nl)") },
+            label = { Text(stringResource(R.string.server_settings_subs_hint)) },
             singleLine = true,
             modifier = Modifier.weight(1f),
         )
         Button(
             onClick = { viewModel.setPref("subs.$mediaType", subs.trim()) },
             modifier = Modifier.padding(start = 8.dp),
-        ) { Text("Save") }
+        ) { Text(stringResource(R.string.save)) }
     }
     if (mediaType == "anime") {
         val view = values["anime_view"] ?: "seasons"

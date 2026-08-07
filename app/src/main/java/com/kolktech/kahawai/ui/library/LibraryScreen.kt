@@ -28,10 +28,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
 import com.kolktech.kahawai.ui.components.OnResumeEffect
@@ -59,7 +61,7 @@ fun LibraryScreen(
             title = { Text(libraryName) },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kw_back))
                 }
             },
         )

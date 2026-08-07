@@ -1,11 +1,13 @@
 package com.kolktech.kahawai.ui.setup
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.auth.ServerConfigStore
 import com.kolktech.kahawai.data.auth.TokenStore
 import com.kolktech.kahawai.data.network.ApiClient
@@ -19,9 +21,10 @@ sealed interface ServerSetupState {
 }
 
 class ServerSetupViewModel(
+    application: Application,
     private val serverConfigStore: ServerConfigStore,
     private val tokenStore: TokenStore,
-) : ViewModel() {
+) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<ServerSetupState>(ServerSetupState.Idle)
     val state: StateFlow<ServerSetupState> = _state
 
@@ -32,7 +35,7 @@ class ServerSetupViewModel(
     fun submit(rawUrl: String) {
         val trimmed = rawUrl.trim()
         if (trimmed.isEmpty()) {
-            _state.value = ServerSetupState.Error("Enter your hub's address")
+            _state.value = ServerSetupState.Error(getApplication<Application>().getString(R.string.setup_enter_address))
             return
         }
         // HttpUrl only parses http/https, so this rejects both stray
@@ -41,7 +44,7 @@ class ServerSetupViewModel(
         val candidate = if (trimmed.contains("://")) trimmed else "http://$trimmed"
         val parsed = candidate.toHttpUrlOrNull()
         if (parsed == null) {
-            _state.value = ServerSetupState.Error("That doesn't look like a valid http:// or https:// address")
+            _state.value = ServerSetupState.Error(getApplication<Application>().getString(R.string.setup_invalid_address))
             return
         }
         checkServer(parsed.toString())
@@ -76,7 +79,7 @@ class ServerSetupViewModel(
                 }
                 _state.value = ServerSetupState.ReadyForLogin
             } catch (e: Exception) {
-                _state.value = ServerSetupState.Error("Couldn't reach $url: ${e.readableMessage()}")
+                _state.value = ServerSetupState.Error(getApplication<Application>().getString(R.string.setup_unreachable, url, e.readableMessage()))
             }
         }
     }

@@ -17,8 +17,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.kolktech.kahawai.BuildConfig
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.auth.ServerConfigStore
 import com.kolktech.kahawai.data.auth.TokenStore
 import kotlinx.coroutines.launch
@@ -39,19 +41,19 @@ fun AppSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("App settings") },
+                title = { Text(stringResource(R.string.app_settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kw_back))
                     }
                 },
             )
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp)) {
-            Text("Hub server", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.app_settings_hub_server), style = MaterialTheme.typography.titleMedium)
             Text(
-                serverConfigStore.baseUrl ?: "not configured",
+                serverConfigStore.baseUrl ?: stringResource(R.string.app_settings_not_configured),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
             )
@@ -65,16 +67,16 @@ fun AppSettingsScreen(
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Change server")
+                Text(stringResource(R.string.app_settings_change_server))
             }
 
             Text(
-                "About",
+                stringResource(R.string.app_settings_about),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(top = 32.dp),
             )
             Text(
-                "kahawai ${BuildConfig.VERSION_NAME}",
+                stringResource(R.string.app_settings_version, BuildConfig.VERSION_NAME),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 4.dp),
             )

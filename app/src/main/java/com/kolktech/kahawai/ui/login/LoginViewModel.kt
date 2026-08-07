@@ -1,10 +1,12 @@
 package com.kolktech.kahawai.ui.login
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.auth.TokenStore
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.LoginRequest
@@ -18,13 +20,13 @@ sealed interface LoginState {
     data object LoggedIn : LoginState
 }
 
-class LoginViewModel(private val tokenStore: TokenStore) : ViewModel() {
+class LoginViewModel(application: Application, private val tokenStore: TokenStore) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<LoginState>(LoginState.Idle)
     val state: StateFlow<LoginState> = _state
 
     fun login(username: String, password: String) {
         if (username.isBlank() || password.isEmpty()) {
-            _state.value = LoginState.Error("Enter a username and password")
+            _state.value = LoginState.Error(getApplication<Application>().getString(R.string.login_enter_username_password))
             return
         }
         _state.value = LoginState.Loading
@@ -34,7 +36,7 @@ class LoginViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 tokenStore.save(tokens)
                 _state.value = LoginState.LoggedIn
             } catch (e: Exception) {
-                _state.value = LoginState.Error("Login failed: ${e.readableMessage()}")
+                _state.value = LoginState.Error(getApplication<Application>().getString(R.string.login_failed, e.readableMessage()))
             }
         }
     }
@@ -44,7 +46,7 @@ class LoginViewModel(private val tokenStore: TokenStore) : ViewModel() {
     /// one (see [com.kolktech.kahawai.data.network.ApiService.setup]).
     fun setup(token: String, username: String, password: String) {
         if (token.isBlank() || username.isBlank() || password.isEmpty()) {
-            _state.value = LoginState.Error("Enter the setup token, a username, and a password")
+            _state.value = LoginState.Error(getApplication<Application>().getString(R.string.login_enter_setup_fields))
             return
         }
         _state.value = LoginState.Loading
@@ -54,7 +56,7 @@ class LoginViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 tokenStore.save(tokens)
                 _state.value = LoginState.LoggedIn
             } catch (e: Exception) {
-                _state.value = LoginState.Error("Setup failed: ${e.readableMessage()}")
+                _state.value = LoginState.Error(getApplication<Application>().getString(R.string.login_setup_failed, e.readableMessage()))
             }
         }
     }

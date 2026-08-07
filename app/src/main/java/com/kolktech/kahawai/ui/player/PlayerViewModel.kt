@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
@@ -490,7 +491,7 @@ class PlayerViewModel(
                 // not a client bug.
                 Log.e(TAG, "Playback failed for item=$itemId sessionId=${session?.sessionId}", error)
                 progressJob?.cancel()
-                _state.value = PlayerState.Error("Playback failed: ${error.readableMessage()}")
+                _state.value = PlayerState.Error(getApplication<Application>().getString(R.string.player_playback_failed, error.readableMessage()))
             }
 
             /// Diagnostic only: pins down whether a "seek far ahead ->
@@ -713,7 +714,7 @@ class PlayerViewModel(
                 // where it was and let the user retry the seek.
                 Log.w(TAG, "seek failed item=$itemId targetMs=$targetMs", e)
                 realPlayer.play()
-                _transientError.value = "Seek failed: ${e.readableMessage()}"
+                _transientError.value = getApplication<Application>().getString(R.string.player_seek_failed, e.readableMessage())
             }
         }
     }
@@ -777,7 +778,7 @@ class PlayerViewModel(
                 // selection that's actually playing.
                 _selectedSubtitleTrack.value = revertTo
                 realPlayer.play()
-                _transientError.value = "Failed to switch subtitle: ${e.readableMessage()}"
+                _transientError.value = getApplication<Application>().getString(R.string.player_subtitle_switch_failed, e.readableMessage())
             }
         }
     }

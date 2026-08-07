@@ -1,5 +1,6 @@
 package com.kolktech.kahawai.ui.admin
 
+import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,10 +40,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.AdminLibrary
 import com.kolktech.kahawai.data.network.dto.CollectionInfo
 import com.kolktech.kahawai.data.network.dto.PendingEnrollment
@@ -64,8 +68,9 @@ fun AdminScreen(
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
 ) {
+    val application = LocalContext.current.applicationContext as Application
     val viewModel: AdminViewModel = viewModel(
-        factory = viewModelFactory { initializer { AdminViewModel() } },
+        factory = viewModelFactory { initializer { AdminViewModel(application) } },
     )
     val state by viewModel.state.collectAsState()
     val notice by viewModel.notice.collectAsState()
@@ -86,10 +91,10 @@ fun AdminScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Admin") },
+                title = { Text(stringResource(R.string.admin_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kw_back))
                     }
                 },
             )
@@ -153,7 +158,7 @@ private fun ProvidersSection(data: AdminData, viewModel: AdminViewModel) {
     var anidbPass by remember { mutableStateOf("") }
     var anidbKey by remember { mutableStateOf("") }
 
-    SectionTitle("Metadata providers")
+    SectionTitle(stringResource(R.string.admin_metadata_providers))
     for (mediaType in data.providers.chains.keys.sorted()) {
         ProviderOrderRow(mediaType, data.providers.chains.getValue(mediaType), viewModel)
     }
@@ -162,7 +167,7 @@ private fun ProvidersSection(data: AdminData, viewModel: AdminViewModel) {
         OutlinedTextField(
             value = tmdbKey,
             onValueChange = { tmdbKey = it },
-            label = { Text(if (data.providers.tmdb.configured) "TMDB key (configured — replace)" else "TMDB API key") },
+            label = { Text(stringResource(if (data.providers.tmdb.configured) R.string.admin_tmdb_key_configured else R.string.admin_tmdb_key)) },
             singleLine = true,
             modifier = Modifier.weight(1f),
         )
@@ -170,15 +175,15 @@ private fun ProvidersSection(data: AdminData, viewModel: AdminViewModel) {
             onClick = { viewModel.setTmdbKey(tmdbKey.trim()); tmdbKey = "" },
             enabled = tmdbKey.isNotBlank(),
             modifier = Modifier.padding(start = 8.dp),
-        ) { Text("Save") }
+        ) { Text(stringResource(R.string.save)) }
     }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
         OutlinedButton(
             onClick = { viewModel.enrichRun() },
             enabled = data.providers.tmdb.configured && !data.enrich.running,
-        ) { Text(if (data.enrich.running) "Enriching…" else "Enrich now") }
+        ) { Text(stringResource(if (data.enrich.running) R.string.admin_enriching else R.string.admin_enrich_now)) }
         Text(
-            "${data.enrich.matched} matched · ${data.enrich.weak} weak · ${data.enrich.missed} missed",
+            stringResource(R.string.admin_enrich_stats, data.enrich.matched, data.enrich.weak, data.enrich.missed),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 12.dp),
@@ -189,14 +194,14 @@ private fun ProvidersSection(data: AdminData, viewModel: AdminViewModel) {
         OutlinedTextField(
             value = tvdbKey,
             onValueChange = { tvdbKey = it },
-            label = { Text(if (data.providers.tvdb.configured) "TVDB key (configured — replace)" else "TVDB API key") },
+            label = { Text(stringResource(if (data.providers.tvdb.configured) R.string.admin_tvdb_key_configured else R.string.admin_tvdb_key)) },
             singleLine = true,
             modifier = Modifier.weight(1f),
         )
         OutlinedTextField(
             value = tvdbPin,
             onValueChange = { tvdbPin = it },
-            label = { Text("PIN") },
+            label = { Text(stringResource(R.string.admin_pin)) },
             singleLine = true,
             modifier = Modifier.weight(0.5f).padding(start = 8.dp),
         )
@@ -204,28 +209,28 @@ private fun ProvidersSection(data: AdminData, viewModel: AdminViewModel) {
             onClick = { viewModel.setTvdbKey(tvdbKey.trim(), tvdbPin.trim().ifBlank { null }); tvdbKey = ""; tvdbPin = "" },
             enabled = tvdbKey.isNotBlank(),
             modifier = Modifier.padding(start = 8.dp),
-        ) { Text("Save") }
+        ) { Text(stringResource(R.string.save)) }
     }
 
     Column(modifier = Modifier.padding(top = 12.dp)) {
         OutlinedTextField(
             value = anidbUser,
             onValueChange = { anidbUser = it },
-            label = { Text(if (data.providers.anidb.configured) "AniDB username (configured — replace)" else "AniDB username") },
+            label = { Text(stringResource(if (data.providers.anidb.configured) R.string.admin_anidb_username_configured else R.string.admin_anidb_username)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = anidbPass,
             onValueChange = { anidbPass = it },
-            label = { Text("AniDB password") },
+            label = { Text(stringResource(R.string.admin_anidb_password)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         )
         OutlinedTextField(
             value = anidbKey,
             onValueChange = { anidbKey = it },
-            label = { Text("UDP API key (optional)") },
+            label = { Text(stringResource(R.string.admin_anidb_udp_key)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         )
@@ -236,7 +241,7 @@ private fun ProvidersSection(data: AdminData, viewModel: AdminViewModel) {
             },
             enabled = anidbUser.isNotBlank() && anidbPass.isNotBlank(),
             modifier = Modifier.padding(top = 8.dp),
-        ) { Text("Save") }
+        ) { Text(stringResource(R.string.save)) }
     }
 }
 
@@ -250,7 +255,7 @@ private fun ProviderOrderRow(mediaType: String, chain: ProviderChain, viewModel:
         Column(modifier = Modifier.weight(1f)) {
             draft.forEachIndexed { index, provider ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${index + 1}. $provider", modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.numbered_item, index + 1, provider), modifier = Modifier.weight(1f))
                     IconButton(
                         enabled = index > 0,
                         onClick = {
@@ -258,7 +263,7 @@ private fun ProviderOrderRow(mediaType: String, chain: ProviderChain, viewModel:
                             next[index] = draft[index - 1]; next[index - 1] = provider
                             draft = next
                         },
-                    ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Higher precedence") }
+                    ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.higher_precedence)) }
                     IconButton(
                         enabled = index < draft.size - 1,
                         onClick = {
@@ -266,13 +271,13 @@ private fun ProviderOrderRow(mediaType: String, chain: ProviderChain, viewModel:
                             next[index] = draft[index + 1]; next[index + 1] = provider
                             draft = next
                         },
-                    ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Lower precedence") }
+                    ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.lower_precedence)) }
                 }
             }
         }
         if (dirty) {
-            Button(onClick = { viewModel.setChain(mediaType, draft) }) { Text("Apply") }
-            TextButton(onClick = { draft = chain.order }) { Text("Reset") }
+            Button(onClick = { viewModel.setChain(mediaType, draft) }) { Text(stringResource(R.string.apply)) }
+            TextButton(onClick = { draft = chain.order }) { Text(stringResource(R.string.reset)) }
         }
     }
 }
@@ -283,23 +288,23 @@ private fun ProviderOrderRow(mediaType: String, chain: ProviderChain, viewModel:
 private fun EnrollmentsSection(pending: List<PendingEnrollment>, viewModel: AdminViewModel) {
     var code by remember { mutableStateOf("") }
 
-    SectionTitle("Pending enrollments")
+    SectionTitle(stringResource(R.string.admin_pending_enrollments))
     if (pending.isEmpty()) {
         Text(
-            "None. A new satellite prints its code on its console when it first starts.",
+            stringResource(R.string.admin_no_pending),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     } else {
         pending.forEach { p ->
-            Text("${p.moduleType} · ${p.name} · ${p.moduleId}", style = MaterialTheme.typography.bodyMedium)
+            Text(stringResource(R.string.admin_pending_item, p.moduleType, p.name, p.moduleId), style = MaterialTheme.typography.bodyMedium)
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
         OutlinedTextField(
             value = code,
             onValueChange = { code = it },
-            label = { Text("Enrollment code (XXXX-XXXX)") },
+            label = { Text(stringResource(R.string.admin_enrollment_code)) },
             singleLine = true,
             modifier = Modifier.weight(1f),
         )
@@ -307,7 +312,7 @@ private fun EnrollmentsSection(pending: List<PendingEnrollment>, viewModel: Admi
             onClick = { viewModel.approve(code.trim()); code = "" },
             enabled = code.isNotBlank(),
             modifier = Modifier.padding(start = 8.dp),
-        ) { Text("Approve") }
+        ) { Text(stringResource(R.string.approve)) }
     }
 }
 
@@ -317,10 +322,10 @@ private fun EnrollmentsSection(pending: List<PendingEnrollment>, viewModel: Admi
 private fun SatellitesSection(satellites: List<Satellite>, viewModel: AdminViewModel) {
     var confirmingDelete by remember { mutableStateOf<String?>(null) }
 
-    SectionTitle("Satellites")
+    SectionTitle(stringResource(R.string.admin_satellites))
     if (satellites.isEmpty()) {
         Text(
-            "No satellites enrolled.",
+            stringResource(R.string.admin_no_satellites),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -328,18 +333,18 @@ private fun SatellitesSection(satellites: List<Satellite>, viewModel: AdminViewM
     satellites.forEach { s ->
         Column(modifier = Modifier.padding(vertical = 6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AssistChip(onClick = {}, label = { Text(if (s.connected) "online" else "offline") })
+                AssistChip(onClick = {}, label = { Text(stringResource(if (s.connected) R.string.online else R.string.offline)) })
                 Text(s.moduleType, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 6.dp))
                 Text(s.name, modifier = Modifier.padding(start = 6.dp).weight(1f))
                 if (s.disabled) {
-                    AssistChip(onClick = {}, label = { Text("disabled") })
+                    AssistChip(onClick = {}, label = { Text(stringResource(R.string.disabled)) })
                 }
             }
             MeasuredFacts(s)
             Row {
                 if (s.moduleType == "transcoder") {
                     TextButton(onClick = { viewModel.setSatelliteDisabled(s.moduleId, !s.disabled) }) {
-                        Text(if (s.disabled) "Enable" else "Disable")
+                        Text(stringResource(if (s.disabled) R.string.enable else R.string.disable))
                     }
                 }
                 TextButton(
@@ -353,7 +358,7 @@ private fun SatellitesSection(satellites: List<Satellite>, viewModel: AdminViewM
                     },
                 ) {
                     Text(
-                        if (confirmingDelete == s.moduleId) "Really delete + revoke?" else "Delete",
+                        stringResource(if (confirmingDelete == s.moduleId) R.string.confirm_delete_revoke else R.string.delete),
                         color = if (confirmingDelete == s.moduleId) MaterialTheme.colorScheme.error else Color.Unspecified,
                     )
                 }
@@ -400,12 +405,12 @@ private fun LibrariesSection(libraries: List<AdminLibrary>, collections: List<Co
     var typeMenuExpanded by remember { mutableStateOf(false) }
     val mediaTypes = listOf("movies", "series", "anime", "music")
 
-    SectionTitle("Libraries")
+    SectionTitle(stringResource(R.string.admin_libraries))
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = newName,
             onValueChange = { newName = it },
-            label = { Text("New library name") },
+            label = { Text(stringResource(R.string.admin_new_library_name)) },
             singleLine = true,
             modifier = Modifier.weight(1f),
         )
@@ -422,7 +427,7 @@ private fun LibrariesSection(libraries: List<AdminLibrary>, collections: List<Co
         Button(
             onClick = { viewModel.createLibrary(newName.trim(), newType); newName = "" },
             enabled = newName.isNotBlank(),
-        ) { Text("Create") }
+        ) { Text(stringResource(R.string.create)) }
     }
 
     libraries.forEach { lib ->
@@ -436,17 +441,20 @@ private fun LibrariesSection(libraries: List<AdminLibrary>, collections: List<Co
                 AssistChip(onClick = {}, label = { Text(lib.mediaType) })
                 Text(lib.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 8.dp).weight(1f))
                 TextButton(onClick = { viewModel.refreshLibrary(lib.id) }, enabled = lib.collections.isNotEmpty()) {
-                    Text("Refresh")
+                    Text(stringResource(R.string.refresh))
                 }
-                TextButton(onClick = { viewModel.deleteLibrary(lib.id) }) { Text("Delete") }
+                TextButton(onClick = { viewModel.deleteLibrary(lib.id) }) { Text(stringResource(R.string.delete)) }
             }
+            val offlineSuffix = stringResource(R.string.admin_offline_suffix)
+            val scannedLabel = stringResource(R.string.admin_scanned)
+            val scanningLabel = stringResource(R.string.admin_scanning)
             lib.collections.forEach { m ->
                 val info = collections.find { it.moduleId == m.moduleId && it.collectionId == m.collectionId }
                 val scan = info?.scan
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 8.dp)) {
                     Text(
-                        (m.hostName ?: m.moduleId) + "/" + m.collectionId + (if (info != null && !info.connected) " (offline)" else "") +
-                            (scan?.let { " · ${if (it.complete) "scanned" else "scanning"} ${it.scanned}" } ?: ""),
+                        (m.hostName ?: m.moduleId) + "/" + m.collectionId + (if (info != null && !info.connected) offlineSuffix else "") +
+                            (scan?.let { " · ${if (it.complete) scannedLabel else scanningLabel} ${it.scanned}" } ?: ""),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -456,7 +464,7 @@ private fun LibrariesSection(libraries: List<AdminLibrary>, collections: List<Co
             }
             if (attachable.isNotEmpty()) {
                 Box(modifier = Modifier.padding(start = 8.dp, top = 4.dp)) {
-                    TextButton(onClick = { attachMenuExpanded = true }) { Text("attach…") }
+                    TextButton(onClick = { attachMenuExpanded = true }) { Text(stringResource(R.string.admin_attach)) }
                     DropdownMenu(expanded = attachMenuExpanded, onDismissRequest = { attachMenuExpanded = false }) {
                         attachable.forEach { c ->
                             DropdownMenuItem(
@@ -479,10 +487,10 @@ private fun LibrariesSection(libraries: List<AdminLibrary>, collections: List<Co
 
 @Composable
 private fun SessionsSection(sessions: List<AdminSession>, viewModel: AdminViewModel) {
-    SectionTitle("Active sessions")
+    SectionTitle(stringResource(R.string.admin_active_sessions))
     if (sessions.isEmpty()) {
         Text(
-            "Nobody is streaming.",
+            stringResource(R.string.admin_no_sessions),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -504,7 +512,7 @@ private fun SessionsSection(sessions: List<AdminSession>, viewModel: AdminViewMo
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = { viewModel.endSession(s.sessionId) }) { Text("End") }
+            TextButton(onClick = { viewModel.endSession(s.sessionId) }) { Text(stringResource(R.string.end)) }
         }
         HorizontalDivider()
     }

@@ -41,11 +41,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
@@ -89,7 +91,7 @@ fun HomeScreen(
                     IconButton(onClick = { menuExpanded = true }) {
                         Icon(
                             Icons.Default.Menu,
-                            contentDescription = "Menu",
+                            contentDescription = stringResource(R.string.home_menu),
                             tint = KahawaiOnSurfaceVariant,
                         )
                     }
@@ -98,25 +100,25 @@ fun HomeScreen(
                     // anchored to a focusable IconButton.
                     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                         DropdownMenuItem(
-                            text = { Text("App settings") },
+                            text = { Text(stringResource(R.string.home_app_settings)) },
                             leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
                             onClick = { menuExpanded = false; onOpenAppSettings() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Server settings") },
+                            text = { Text(stringResource(R.string.home_server_settings)) },
                             leadingIcon = { Icon(Icons.Default.Storage, contentDescription = null) },
                             onClick = { menuExpanded = false; onOpenServerSettings() },
                         )
                         if (isAdmin) {
                             DropdownMenuItem(
-                                text = { Text("Admin") },
+                                text = { Text(stringResource(R.string.home_admin)) },
                                 leadingIcon = { Icon(Icons.Default.AdminPanelSettings, contentDescription = null) },
                                 onClick = { menuExpanded = false; onOpenAdmin() },
                             )
                         }
                         HorizontalDivider()
                         DropdownMenuItem(
-                            text = { Text("Log out") },
+                            text = { Text(stringResource(R.string.home_log_out)) },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
                             onClick = { menuExpanded = false; onLogout() },
                         )
@@ -126,7 +128,7 @@ fun HomeScreen(
                     IconButton(onClick = onSearch) {
                         Icon(
                             Icons.Default.Search,
-                            contentDescription = "Search",
+                            contentDescription = stringResource(R.string.search),
                             tint = KahawaiOnSurfaceVariant,
                         )
                     }
@@ -152,7 +154,7 @@ fun HomeScreen(
                 is HomeState.Loaded -> {
                     if (s.rows.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No libraries yet. Connect a mediahost to the hub.")
+                            Text(stringResource(R.string.home_no_libraries))
                         }
                     } else {
                         // The very first poster on screen needs a D-pad
@@ -237,7 +239,7 @@ private fun LibraryHeader(
         if (row.total > row.items.size) {
             TextButton(onClick = { onOpenLibrary(row.library.id, row.library.name) }) {
                 Text(
-                    "see all (${row.total})",
+                    stringResource(R.string.home_see_all, row.total),
                     style = MaterialTheme.typography.bodySmall,
                     color = KahawaiOnSurfaceVariant,
                 )
