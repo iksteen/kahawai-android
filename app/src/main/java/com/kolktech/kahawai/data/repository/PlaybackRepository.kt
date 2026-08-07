@@ -1,6 +1,7 @@
 package com.kolktech.kahawai.data.repository
 
 import com.kolktech.kahawai.data.network.ApiClient
+import com.kolktech.kahawai.data.network.ApiService
 import com.kolktech.kahawai.data.network.dto.CapabilityProfile
 import com.kolktech.kahawai.data.network.dto.FontsResponse
 import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
@@ -11,7 +12,7 @@ import com.kolktech.kahawai.data.network.dto.StartSessionRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 
-class PlaybackRepository {
+class PlaybackRepository(private val api: ApiService = ApiClient.apiService()) {
     suspend fun startSession(
         itemId: String,
         profile: CapabilityProfile,
@@ -19,7 +20,7 @@ class PlaybackRepository {
         audioTrack: Int = 0,
         videoTrack: Int = 0,
         subtitleTrack: Long? = null,
-    ): StartSessionResponse = ApiClient.apiService().startSession(
+    ): StartSessionResponse = api.startSession(
         StartSessionRequest(
             itemId = itemId,
             profile = profile,
@@ -31,7 +32,7 @@ class PlaybackRepository {
     )
 
     suspend fun seek(sessionId: String, positionMs: Long, subtitleTrack: Long? = null): SeekResponse =
-        ApiClient.apiService().seek(sessionId, SeekRequest(positionMs = positionMs, subtitleTrack = subtitleTrack))
+        api.seek(sessionId, SeekRequest(positionMs = positionMs, subtitleTrack = subtitleTrack))
 
     /// Track list + computed delivery for this client's declared
     /// [profile] (tracks.rs `Delivery`), read off the same QUERY that
@@ -40,16 +41,16 @@ class PlaybackRepository {
     /// because it could resolve a different source than the session did
     /// (kahawai commit 5147059).
     suspend fun subtitles(itemId: String, profile: CapabilityProfile): List<SubtitleTrack> =
-        ApiClient.apiService().itemQuery(itemId, ItemQueryRequest(profile = profile)).negotiated?.subtitles
+        api.itemQuery(itemId, ItemQueryRequest(profile = profile)).negotiated?.subtitles
             ?: emptyList()
 
-    suspend fun fonts(itemId: String): FontsResponse = ApiClient.apiService().fonts(itemId)
+    suspend fun fonts(itemId: String): FontsResponse = api.fonts(itemId)
 
     suspend fun reportProgress(sessionId: String, positionMs: Long) {
-        ApiClient.apiService().progress(sessionId, ProgressRequest(positionMs = positionMs))
+        api.progress(sessionId, ProgressRequest(positionMs = positionMs))
     }
 
     suspend fun endSession(sessionId: String) {
-        ApiClient.apiService().endSession(sessionId)
+        api.endSession(sessionId)
     }
 }

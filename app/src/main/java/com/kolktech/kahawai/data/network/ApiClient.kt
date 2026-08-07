@@ -3,8 +3,6 @@ package com.kolktech.kahawai.data.network
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -31,12 +29,6 @@ object ApiClient {
     private var authClient: OkHttpClient? = null
     private var plainRetrofit: Retrofit? = null
     private var authRetrofit: Retrofit? = null
-
-    @OptIn(ExperimentalSerializationApi::class)
-    private val json = Json {
-        ignoreUnknownKeys = true
-        namingStrategy = kotlinx.serialization.json.JsonNamingStrategy.SnakeCase
-    }
 
     fun init(tokenStore: TokenStore, serverConfigStore: ServerConfigStore) {
         this.tokenStore = tokenStore
@@ -139,6 +131,6 @@ object ApiClient {
         Retrofit.Builder()
             .baseUrl(baseUrl)
             .client(client)
-            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .addConverterFactory(apiJson.asConverterFactory("application/json".toMediaType()))
             .build()
 }

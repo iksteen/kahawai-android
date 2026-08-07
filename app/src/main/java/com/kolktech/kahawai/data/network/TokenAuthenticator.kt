@@ -6,7 +6,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.Route
 import retrofit2.HttpException
-import com.kolktech.kahawai.data.auth.TokenStore
+import com.kolktech.kahawai.data.auth.TokenStorage
 import com.kolktech.kahawai.data.network.dto.RefreshRequest
 
 /// 401 -> refresh -> retry once, mirroring the web client's
@@ -17,7 +17,7 @@ import com.kolktech.kahawai.data.network.dto.RefreshRequest
 /// on an OkHttp dispatcher thread, never the main thread, so blocking
 /// inside the lock (via runBlocking) is safe here.
 class TokenAuthenticator(
-    private val tokenStore: TokenStore,
+    private val tokenStore: TokenStorage,
     private val plainApiService: () -> ApiService,
 ) : Authenticator {
     override fun authenticate(route: Route?, response: Response): Request? {

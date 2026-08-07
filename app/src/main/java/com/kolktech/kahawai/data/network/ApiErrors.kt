@@ -37,7 +37,7 @@ private fun Throwable.rootPlaybackCause(): Throwable {
 
 private fun Throwable.readablePlaybackMessage(): String {
     if (this is HttpDataSource.InvalidResponseCodeException) {
-        val body = responseBody?.toString(Charsets.UTF_8)?.trim()
+        val body = responseBody.toString(Charsets.UTF_8).trim()
         if (!body.isNullOrEmpty()) return body
         return "HTTP $responseCode" + (responseMessage?.let { " $it" } ?: "")
     }

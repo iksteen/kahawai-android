@@ -33,7 +33,7 @@ private val Context.tokenDataStore by preferencesDataStore("kahawai_tokens")
 /// dispatcher thread (never the main thread), so [accessToken] and
 /// [refreshToken] read an in-memory cache rather than suspend — it's
 /// hydrated once at construction and kept current by [save]/[clear].
-class TokenStore(private val context: Context) {
+class TokenStore(private val context: Context) : TokenStorage {
     private val aead: Aead by lazy {
         AeadConfig.register()
         AndroidKeysetManager.Builder()
@@ -67,8 +67,8 @@ class TokenStore(private val context: Context) {
         cache = readFromDisk()
     }
 
-    val accessToken: String? get() = cache?.first
-    val refreshToken: String? get() = cache?.second
+    override val accessToken: String? get() = cache?.first
+    override val refreshToken: String? get() = cache?.second
     val hasTokens: Boolean get() = cache != null
 
     /// UI-only hint (menu item visibility) decoded from the current access
@@ -77,7 +77,7 @@ class TokenStore(private val context: Context) {
     /// for the lifetime of a signed-in session.
     val isAdmin: Boolean get() = accessToken?.let(::decodeAdminClaim) ?: false
 
-    suspend fun save(tokens: TokenPair) {
+    override suspend fun save(tokens: TokenPair) {
         cache = tokens.accessToken to tokens.refreshToken
         context.tokenDataStore.edit { prefs ->
             prefs[KEY_ACCESS] = encrypt(tokens.accessToken)
@@ -85,7 +85,7 @@ class TokenStore(private val context: Context) {
         }
     }
 
-    suspend fun clear() {
+    override suspend fun clear() {
         cache = null
         context.tokenDataStore.edit { it.clear() }
     }

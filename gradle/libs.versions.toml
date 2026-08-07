@@ -1,5 +1,5 @@
 [versions]
-agp = "9.2.0"
+agp = "9.3.0"
 # Pinned to the Kotlin Gradle Plugin version AGP 9.2.0 bundles for its
 # built-in Kotlin support (AGP 9.0+ no longer uses a separate
 # org.jetbrains.kotlin.android plugin) — the compose/serialization
@@ -24,10 +24,16 @@ profileinstaller = "1.4.1"
 # positioning). Prebuilt native .so + Kotlin wrapper published to Maven
 # Central; no NDK/CMake needed on our side. https://github.com/peerless2012/libass-android
 libassAndroid = "0.5.0"
+junit = "4.13.2"
+mockwebserver = "4.12.0"
+mockk = "1.14.2"
+kotlinxCoroutinesTest = "1.10.1"
+turbine = "1.2.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
@@ -59,6 +65,11 @@ coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp"
 ass = { group = "io.github.peerless2012", name = "ass", version.ref = "libassAndroid" }
 ass-kt = { group = "io.github.peerless2012", name = "ass-kt", version.ref = "libassAndroid" }
 ass-media = { group = "io.github.peerless2012", name = "ass-media", version.ref = "libassAndroid" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "mockwebserver" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
+turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -47,6 +47,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.ApiClient
+import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.readableMessage
@@ -113,6 +114,34 @@ private const val TAG = "PlayerViewModel"
 /// time is never greater than infinity, so the check can never fire.
 private const val HLS_PLAYLIST_STUCK_COEFFICIENT = Double.MAX_VALUE
 
+/// Where to start the player and how to interpret [PlayerViewModel]'s
+/// running position, derived from the session mode the hub negotiated.
+/// "direct" mode serves the file's own timeline (a real seek to
+/// [startMs], offset 0); "remux"/"transcode" mode restarts the hub's
+/// pipeline AT [startMs] (attach at local position 0, offset [startMs]
+/// so absolute-position math elsewhere stays correct). See start().
+internal data class ResumePlan(val offsetMs: Long, val startPositionMs: Long)
+
+internal fun resumePlan(mode: String, startMs: Long): ResumePlan =
+    if (mode == "direct") ResumePlan(offsetMs = 0, startPositionMs = startMs)
+    else ResumePlan(offsetMs = startMs, startPositionMs = 0)
+
+/// [siblings] is the whole show's episodes pre-sorted by season then
+/// episode (hub api.rs item_children) — the next entry after [itemId]'s
+/// own position IS the next episode to play, no season-boundary math
+/// needed. Returns null for non-episodes, items with no parent, the
+/// last episode of a show, or an [itemId] not found in [siblings].
+internal fun resolveNextEpisode(
+    kind: String?,
+    parentId: String?,
+    itemId: String,
+    siblings: List<Item>,
+): String? {
+    if (kind != "episode" || parentId == null) return null
+    val index = siblings.indexOfFirst { it.id == itemId }
+    return if (index >= 0) siblings.getOrNull(index + 1)?.id else null
+}
+
 @OptIn(UnstableApi::class)
 class PlayerViewModel(
     application: Application,
@@ -121,6 +150,7 @@ class PlayerViewModel(
     private val startMs: Long,
     private val initialAudioTrack: Int = 0,
     private val initialSubtitleTrackId: Long? = null,
+    private val catalogRepo: CatalogRepository = CatalogRepository(),
 ) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<PlayerState>(PlayerState.Loading)
     val state: StateFlow<PlayerState> = _state
@@ -151,12 +181,6 @@ class PlayerViewModel(
     /// failing playback.
     private val _title = MutableStateFlow<String?>(null)
     val title: StateFlow<String?> = _title
-
-    /// children() has no dedicated "next up" endpoint to call — only
-    /// needed on natural end-of-playback, so a plain instance here (like
-    /// PlayerScreen's own subtitleRepo) beats threading one through the
-    /// constructor for a single use site.
-    private val catalogRepo = CatalogRepository()
 
     private val realPlayer: ExoPlayer by lazy {
         val dataSourceFactory = DefaultDataSource.Factory(
@@ -610,13 +634,9 @@ class PlayerViewModel(
                 // too, which both started resumed playback from the
                 // beginning AND reported/rendered everything shifted by
                 // startMs.
-                if (session.mode == "direct") {
-                    offsetMs = 0
-                    attach(session, startPositionMs = startMs, requestedAbsMs = startMs)
-                } else {
-                    offsetMs = startMs
-                    attach(session, startPositionMs = 0, requestedAbsMs = startMs)
-                }
+                val plan = resumePlan(session.mode, startMs)
+                offsetMs = plan.offsetMs
+                attach(session, startPositionMs = plan.startPositionMs, requestedAbsMs = startMs)
                 _state.value = PlayerState.Ready
                 startProgressLoop()
             } catch (e: Exception) {
@@ -641,16 +661,11 @@ class PlayerViewModel(
                 val detail = catalogRepo.item(itemId)
                 val parentId = detail.parentId
                 if (detail.kind != "episode" || parentId == null) return@launch
-                // children() returns the whole show's episodes pre-sorted
-                // by season then episode (hub api.rs item_children) — the
-                // next entry after this item's own position IS the next
-                // episode to play, no season-boundary math needed.
                 val siblings = catalogRepo.children(parentId)
-                val index = siblings.indexOfFirst { it.id == itemId }
-                val next = if (index >= 0) siblings.getOrNull(index + 1) else null
-                if (next != null) {
-                    Log.d(TAG, "auto-advancing item=$itemId -> next=${next.id}")
-                    _nextEpisodeId.value = next.id
+                val nextId = resolveNextEpisode(detail.kind, parentId, itemId, siblings)
+                if (nextId != null) {
+                    Log.d(TAG, "auto-advancing item=$itemId -> next=$nextId")
+                    _nextEpisodeId.value = nextId
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "failed to resolve next episode after item=$itemId ended", e)
