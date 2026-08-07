@@ -56,7 +56,7 @@ jobs:
              "release-out/kahawai-${{ steps.version.outputs.name }}.apk"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release-out/*.apk
           generate_release_notes: true
