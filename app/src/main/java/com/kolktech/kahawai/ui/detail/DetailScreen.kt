@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,6 +46,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -64,6 +66,23 @@ import com.kolktech.kahawai.data.network.dto.VideoStreamInfo
 import com.kolktech.kahawai.data.network.dto.displayLabel
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
+
+/// A thick, high-contrast ring around whatever holds D-pad focus. The
+/// default Material focus indication is nearly invisible from couch
+/// distance; every focusable control on this screen routes through this
+/// so "where am I" is always obvious. The border is always present
+/// (transparent when unfocused) so gaining focus never shifts layout.
+@Composable
+private fun Modifier.dpadFocusBorder(shape: Shape = CircleShape): Modifier {
+    var focused by remember { mutableStateOf(false) }
+    return this
+        .onFocusChanged { focused = it.isFocused }
+        .border(
+            width = 3.dp,
+            color = if (focused) MaterialTheme.colorScheme.onBackground else Color.Transparent,
+            shape = shape,
+        )
+}
 
 @Composable
 fun DetailScreen(
@@ -126,19 +145,13 @@ fun DetailScreen(
         // own back button) rather than a full TopAppBar, which would
         // shove the artwork down and duplicate the title shown right
         // below it.
-        var backFocused by remember { mutableStateOf(false) }
         Surface(
             onClick = onBack,
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(16.dp)
                 .focusRequester(backButtonFocusRequester)
-                .onFocusChanged { backFocused = it.isFocused }
-                .border(
-                    width = if (backFocused) 2.dp else 0.dp,
-                    color = MaterialTheme.colorScheme.primary,
-                    shape = CircleShape,
-                ),
+                .dpadFocusBorder(),
             shape = CircleShape,
             color = Color.Black.copy(alpha = 0.5f),
         ) {
@@ -307,18 +320,25 @@ private fun DetailInfo(
     ResumeLine(detail)
 
     if (detail.kind !in NOT_DIRECTLY_PLAYABLE) {
-        Button(
-            onClick = {
-                onPlay(
-                    detail.id,
-                    detail.resumePositionMs ?: 0,
-                    selectedAudioTrackIndex,
-                    selectedSubtitleTrack?.id,
-                )
-            },
-            modifier = Modifier.padding(top = 12.dp).focusRequester(playButtonFocusRequester),
+        val resumeMs = detail.resumePositionMs ?: 0
+        Row(
+            modifier = Modifier.padding(top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(if ((detail.resumePositionMs ?: 0) > 0) "Resume" else "Play")
+            Button(
+                onClick = { onPlay(detail.id, resumeMs, selectedAudioTrackIndex, selectedSubtitleTrack?.id) },
+                modifier = Modifier.focusRequester(playButtonFocusRequester).dpadFocusBorder(),
+            ) {
+                Text(if (resumeMs > 0) "Resume" else "Play")
+            }
+            if (resumeMs > 0) {
+                OutlinedButton(
+                    onClick = { onPlay(detail.id, 0, selectedAudioTrackIndex, selectedSubtitleTrack?.id) },
+                    modifier = Modifier.dpadFocusBorder(),
+                ) {
+                    Text("Start over")
+                }
+            }
         }
 
         if (audioTracks.size > 1) {
@@ -369,7 +389,7 @@ private fun SubtitlePicker(
     var showPicker by remember { mutableStateOf(false) }
     Column(modifier = modifier) {
         Text("Subtitles", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
-        OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth().dpadFocusBorder()) {
             Text(selected?.displayLabel() ?: "Off", modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
         }
     }
@@ -414,8 +434,13 @@ private fun SelectableRow(text: String, selected: Boolean, enabled: Boolean = tr
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused }
             .background(
-                if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent,
+                if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color.Transparent,
                 RoundedCornerShape(4.dp),
+            )
+            .border(
+                width = 2.dp,
+                color = if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                shape = RoundedCornerShape(4.dp),
             )
             .clickable(enabled = enabled, onClick = onClick)
             .padding(vertical = 4.dp),
@@ -495,7 +520,11 @@ private fun ChildRow(child: Item, onOpenItem: (String) -> Unit, focusRequester: 
             .fillMaxWidth()
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
-            .background(if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent)
+            .background(if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color.Transparent)
+            .border(
+                width = 2.dp,
+                color = if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
+            )
             .clickable { onOpenItem(child.id) }
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {

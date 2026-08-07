@@ -144,12 +144,43 @@
 
   </LinearLayout>
 
+  <!-- Back button + title live here (not in a Compose overlay) because
+       exo_top_controls is one of the views PlayerControlViewLayoutManager
+       alpha-animates together with the background and bottom bar, so they
+       fade in/out in perfect sync with the rest of the controls — and, as
+       real controller children, they're reachable by D-pad focus on TV. -->
   <LinearLayout
       android:id="@+id/exo_top_controls"
-      android:layout_width="wrap_content"
+      android:layout_width="match_parent"
       android:layout_height="wrap_content"
-      android:layout_gravity="top|end"
+      android:layout_gravity="top"
+      android:orientation="horizontal"
+      android:gravity="center_vertical"
+      android:padding="16dp"
       android:background="@android:color/transparent">
+
+    <ImageButton
+        android:id="@+id/kw_back"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:padding="10dp"
+        android:scaleType="centerInside"
+        android:background="@drawable/kw_circle_button_bg"
+        android:src="@drawable/kw_ic_arrow_back"
+        android:contentDescription="@string/kw_back"/>
+
+    <TextView
+        android:id="@+id/kw_player_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginStart="12dp"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:maxLines="1"
+        android:ellipsize="end"/>
+
     <View
         android:id="@+id/exo_media_route_button_placeholder"
         android:layout_width="wrap_content"

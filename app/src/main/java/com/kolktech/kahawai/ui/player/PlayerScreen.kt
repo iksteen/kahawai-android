@@ -4,8 +4,10 @@ import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.GestureDetector
 import android.view.LayoutInflater
@@ -16,20 +18,15 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.PopupMenu
+import android.widget.TextView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -52,7 +50,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
@@ -252,6 +249,10 @@ private const val SEEK_EXTRA_TAP_MS = 2_500L
 /// visible == "another tap will add to the seek").
 private const val SEEK_CHAIN_WINDOW_MS = 800L
 
+/// Two TV-remote back presses within this window leave the player; a
+/// lone press only toggles the controls.
+private const val TV_BACK_EXIT_WINDOW_MS = 1_000L
+
 @OptIn(UnstableApi::class)
 @Composable
 private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
@@ -277,13 +278,39 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     var hideJob by remember { mutableStateOf<Job?>(null) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     var resizeModeIndex by remember { mutableIntStateOf(0) }
-    var controllerVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val title by viewModel.title.collectAsState()
     val selectedSubtitle by viewModel.selectedSubtitleTrack.collectAsState()
     val subtitleSession by viewModel.subtitleSession.collectAsState()
     val transientError by viewModel.transientError.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // TV remote back handling: a first press reveals the controls, a
+    // press while they're up dismisses them (playback continues), and
+    // two quick presses within TV_BACK_EXIT_WINDOW_MS actually leave
+    // the player. Registered after PlayerScreen's own BackHandler so it
+    // takes precedence while enabled; on touch devices it stays
+    // disabled and back keeps exiting directly.
+    val isTv = remember(context) {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    }
+    var lastTvBackAtMs by remember { mutableLongStateOf(0L) }
+    BackHandler(enabled = isTv) {
+        val now = SystemClock.uptimeMillis()
+        val view = playerView
+        when {
+            now - lastTvBackAtMs <= TV_BACK_EXIT_WINDOW_MS -> onClose()
+            view?.isControllerFullyVisible == true -> view.hideController()
+            else -> {
+                view?.showController()
+                // Land D-pad focus inside the freshly shown controls so
+                // the next arrow press navigates buttons instead of
+                // going nowhere (Compose holds no focusable here).
+                view?.requestFocus()
+            }
+        }
+        lastTvBackAtMs = now
+    }
 
     // Recoverable failures (failed seek, failed subtitle switch) — the
     // stream is still playing, so they get a snackbar here rather than
@@ -668,11 +695,10 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                         gestureDetector.onTouchEvent(event)
                         true
                     }
-                    setControllerVisibilityListener(
-                        PlayerView.ControllerVisibilityListener { visibility ->
-                            controllerVisible = visibility == View.VISIBLE
-                        },
-                    )
+                    // Back button + title live inside the controller
+                    // layout (kw_player_control_view.xml) so they fade
+                    // in sync with the rest of the controls.
+                    findViewById<ImageButton>(R.id.kw_back).setOnClickListener { onClose() }
                     findViewById<ImageButton>(androidx.media3.ui.R.id.exo_settings).setOnClickListener { anchor ->
                         showSettingsMenu(ctx, anchor)
                     }
@@ -737,34 +763,10 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             }
         }
 
-        if (controllerVisible) {
-            Row(
-                modifier = Modifier.align(Alignment.TopStart).padding(16.dp).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(
-                    onClick = onClose,
-                    shape = CircleShape,
-                    color = Color.Black.copy(alpha = 0.5f),
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        modifier = Modifier.padding(10.dp),
-                        tint = Color.White,
-                    )
-                }
-                if (!title.isNullOrBlank()) {
-                    Text(
-                        text = title!!,
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 12.dp).weight(1f, fill = false),
-                    )
-                }
-            }
+        // The native title view can't observe the StateFlow itself, so
+        // push updates into it from composition.
+        LaunchedEffect(title, playerView) {
+            playerView?.findViewById<TextView>(R.id.kw_player_title)?.text = title.orEmpty()
         }
 
         indicator?.let { current ->
