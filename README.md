@@ -58,8 +58,12 @@ entry, D-pad friendly UI).
   (routed through the hub's seek-restart endpoint for HLS sessions,
   since those serve a growing EVENT playlist) → end session on exit.
   Resume/start-over prompts and next-episode auto-advance for series.
-- **Subtitles**: text tracks render on-device (`ui/player/subtitle/`);
-  image-format tracks are burned in by the hub.
+- **Subtitles**: text and image-format (PGS/VobSub) tracks both render
+  on-device (`ui/player/subtitle/`) — text via Media3, images via a
+  Compose-canvas overlay (`ImageSubtitleOverlay.kt`) that composites
+  display sets the hub decodes and streams over a tap. Server-side
+  burn-in is now only a hub-chosen fallback for tracks it can't deliver
+  either way.
 - **Admin & settings**: hub administration and app settings screens
   (`ui/admin/`, `ui/settings/`), reachable from the navigation drawer.
 
