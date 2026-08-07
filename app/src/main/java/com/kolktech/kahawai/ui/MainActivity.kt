@@ -1,5 +1,6 @@
 package com.kolktech.kahawai.ui
 
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,6 +17,15 @@ import com.kolktech.kahawai.ui.nav.KahawaiNavGraph
 import com.kolktech.kahawai.ui.theme.KahawaiTheme
 
 class MainActivity : ComponentActivity() {
+    /// Picture-in-picture hooks, registered by the player screen for
+    /// exactly as long as it's on-screen and null the rest of the time.
+    /// onUserLeaveHint is the only PiP entry point before Android 12
+    /// (12+ auto-enters via PictureInPictureParams.setAutoEnterEnabled);
+    /// it fires on Home/Recents from ANY screen, so it must stay a no-op
+    /// unless the player has registered.
+    var onUserLeaveWithPlayback: (() -> Unit)? = null
+    var pipModeListener: ((Boolean) -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -31,6 +41,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        onUserLeaveWithPlayback?.invoke()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pipModeListener?.invoke(isInPictureInPictureMode)
     }
 
     /// The system can bring the status bar back on its own across focus

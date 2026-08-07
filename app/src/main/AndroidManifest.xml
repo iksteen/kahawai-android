@@ -11,6 +11,7 @@
         android:name=".KahawaiApp"
         android:allowBackup="false"
         android:banner="@drawable/tv_banner"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.Kahawai"
@@ -20,6 +21,7 @@
             android:name=".ui.MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.Kahawai">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

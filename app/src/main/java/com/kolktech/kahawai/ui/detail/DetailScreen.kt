@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -30,6 +32,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,11 +51,12 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
+import androidx.window.core.layout.WindowSizeClass
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -187,14 +191,20 @@ private fun DetailContent(
 ) {
     val detail = state.detail
     val children = state.children
-    val configuration = LocalConfiguration.current
-    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+    // Window size class rather than orientation: a portrait tablet or
+    // unfolded foldable (medium+ width) has room for the side-by-side
+    // layout even though it's "portrait", and a landscape phone (compact
+    // height) is too short for the stacked full-width hero even when its
+    // width lands under the medium breakpoint.
+    val windowSizeClass = currentWindowAdaptiveInfo().windowSizeClass
+    val useTwoPane = windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) ||
+        !windowSizeClass.isHeightAtLeastBreakpoint(WindowSizeClass.HEIGHT_DP_MEDIUM_LOWER_BOUND)
     val primarySource = detail.sources.firstOrNull()
     val audioTracks = primarySource?.streams?.audio.orEmpty()
     val videoStream = primarySource?.streams?.video?.firstOrNull()
     val runtimeMs = primarySource?.streams?.durationMs ?: detail.resumeDurationMs
 
-    if (isLandscape) {
+    if (useTwoPane) {
         // The poster stays fixed on the left; info + episodes scroll
         // together in their own column on the right (Netflix/TV-style
         // detail layout) rather than the whole page — including the
@@ -203,51 +213,59 @@ private fun DetailContent(
         // text info, no full-height hero image eating the viewport), so
         // the first row is reliably composed immediately instead of
         // being deferred below the fold.
-        Row(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .aspectRatio(2f / 3f),
-            ) {
-                AsyncImage(
-                    model = repo.artworkUrl(detail.id, detail.artVersion, "card"),
-                    contentDescription = detail.title,
-                    contentScale = ContentScale.Crop,
-                    placeholder = painterResource(R.drawable.placeholder_poster),
-                    error = painterResource(R.drawable.placeholder_poster),
-                    modifier = Modifier.fillMaxSize(),
-                )
-                WatchProgressBar(
-                    positionMs = detail.resumePositionMs,
-                    durationMs = detail.resumeDurationMs,
-                    played = detail.played,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
-            }
-            LazyColumn(modifier = Modifier.weight(1f).fillMaxHeight().padding(16.dp)) {
-                item {
-                    DetailInfo(
-                        detail = detail,
-                        audioTracks = audioTracks,
-                        videoStream = videoStream,
-                        runtimeMs = runtimeMs,
-                        subtitleTracks = state.subtitleTracks,
-                        selectedAudioTrackIndex = state.selectedAudioTrackIndex,
-                        selectedSubtitleTrack = state.selectedSubtitleTrack,
-                        onSelectAudioTrack = onSelectAudioTrack,
-                        onSelectSubtitleTrack = onSelectSubtitleTrack,
-                        onPlay = onPlay,
-                        playButtonFocusRequester = playButtonFocusRequester,
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            // Full-height 2:3 poster where the window is short (landscape
+            // phone/TV — the poster column fills the height exactly), but
+            // never more than 40% of the width, so a tall window (portrait
+            // tablet) keeps the poster modest and leaves the width to the
+            // info/episodes pane.
+            val posterWidth = min(maxHeight * 2f / 3f, maxWidth * 0.4f)
+            Row(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .width(posterWidth)
+                        .aspectRatio(2f / 3f),
+                ) {
+                    AsyncImage(
+                        model = repo.artworkUrl(detail.id, detail.artVersion, "card"),
+                        contentDescription = detail.title,
+                        contentScale = ContentScale.Crop,
+                        placeholder = painterResource(R.drawable.placeholder_poster),
+                        error = painterResource(R.drawable.placeholder_poster),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    WatchProgressBar(
+                        positionMs = detail.resumePositionMs,
+                        durationMs = detail.resumeDurationMs,
+                        played = detail.played,
+                        modifier = Modifier.align(Alignment.BottomCenter),
                     )
                 }
-                if (children.isNotEmpty()) {
-                    itemsIndexed(children, key = { _, child -> child.id }) { index, child ->
-                        ChildRow(
-                            child,
-                            onOpenItem,
-                            focusRequester = if (index == 0) firstChildFocusRequester else null,
+                LazyColumn(modifier = Modifier.weight(1f).fillMaxHeight().padding(16.dp)) {
+                    item {
+                        DetailInfo(
+                            detail = detail,
+                            audioTracks = audioTracks,
+                            videoStream = videoStream,
+                            runtimeMs = runtimeMs,
+                            subtitleTracks = state.subtitleTracks,
+                            selectedAudioTrackIndex = state.selectedAudioTrackIndex,
+                            selectedSubtitleTrack = state.selectedSubtitleTrack,
+                            onSelectAudioTrack = onSelectAudioTrack,
+                            onSelectSubtitleTrack = onSelectSubtitleTrack,
+                            onPlay = onPlay,
+                            playButtonFocusRequester = playButtonFocusRequester,
                         )
-                        HorizontalDivider()
+                    }
+                    if (children.isNotEmpty()) {
+                        itemsIndexed(children, key = { _, child -> child.id }) { index, child ->
+                            ChildRow(
+                                child,
+                                onOpenItem,
+                                focusRequester = if (index == 0) firstChildFocusRequester else null,
+                            )
+                            HorizontalDivider()
+                        }
                     }
                 }
             }

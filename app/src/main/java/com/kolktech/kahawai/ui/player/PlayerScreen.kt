@@ -2,6 +2,7 @@ package com.kolktech.kahawai.ui.player
 
 import android.app.Activity
 import android.app.Application
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
@@ -9,6 +10,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Rational
 import android.view.GestureDetector
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -60,8 +62,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.media3.common.C
+import androidx.media3.common.Player
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.DefaultTrackNameProvider
@@ -71,6 +75,7 @@ import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.dto.displayLabel
 import com.kolktech.kahawai.data.repository.PlaybackRepository
+import com.kolktech.kahawai.ui.MainActivity
 import com.kolktech.kahawai.ui.player.subtitle.AssSubtitleOverlay
 import com.kolktech.kahawai.ui.player.subtitle.ImageSubtitleOverlay
 import kotlinx.coroutines.Job
@@ -310,6 +315,95 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             }
         }
         lastTvBackAtMs = now
+    }
+
+    // Picture-in-picture on touch devices: playback follows the user to
+    // the home screen instead of pausing. Android 12+ auto-enters via
+    // setAutoEnterEnabled (which also gets the smooth shrink animation);
+    // older versions enter explicitly from onUserLeaveHint. TV devices
+    // don't report FEATURE_PICTURE_IN_PICTURE, so all of this is inert
+    // there. Only entered while actually playing — a paused player on
+    // Home is just backgrounded (and the ON_STOP observer above pauses
+    // it anyway).
+    val mainActivity = activity as? MainActivity
+    val supportsPip = remember(context) {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+    }
+    var isInPip by remember { mutableStateOf(mainActivity?.isInPictureInPictureMode == true) }
+
+    fun pipParams(): PictureInPictureParams {
+        // The framework rejects aspect ratios outside [1/2.39, 2.39];
+        // clamp ultra-wide (and, in theory, ultra-tall) video to the
+        // nearest allowed shape. 16:9 stands in until the first
+        // onVideoSizeChanged delivers real dimensions.
+        val size = viewModel.player.videoSize
+        val width = size.width.takeIf { it > 0 } ?: 16
+        val height = size.height.takeIf { it > 0 } ?: 9
+        val ratio = width.toFloat() / height
+        val aspect = when {
+            ratio > 2.35f -> Rational(235, 100)
+            ratio < 1 / 2.35f -> Rational(100, 235)
+            else -> Rational(width, height)
+        }
+        return PictureInPictureParams.Builder()
+            .setAspectRatio(aspect)
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    setAutoEnterEnabled(viewModel.player.isPlaying)
+                    setSeamlessResizeEnabled(true)
+                }
+            }
+            .build()
+    }
+
+    DisposableEffect(mainActivity, supportsPip, viewModel) {
+        if (mainActivity == null || !supportsPip) {
+            onDispose {}
+        } else {
+            mainActivity.onUserLeaveWithPlayback = {
+                if (viewModel.player.isPlaying && !mainActivity.isInPictureInPictureMode) {
+                    playerView?.hideController()
+                    mainActivity.enterPictureInPictureMode(pipParams())
+                }
+            }
+            mainActivity.pipModeListener = { inPip ->
+                isInPip = inPip
+                if (inPip) playerView?.hideController()
+            }
+            // Keep the registered params fresh so Android 12+'s auto-enter
+            // has the right aspect ratio on hand and only triggers while
+            // playing.
+            val listener = object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        mainActivity.setPictureInPictureParams(pipParams())
+                    }
+                }
+
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        mainActivity.setPictureInPictureParams(pipParams())
+                    }
+                }
+            }
+            viewModel.player.addListener(listener)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                mainActivity.setPictureInPictureParams(pipParams())
+            }
+            onDispose {
+                viewModel.player.removeListener(listener)
+                mainActivity.onUserLeaveWithPlayback = null
+                mainActivity.pipModeListener = null
+                // Leaving the player must take auto-enter with it, or
+                // pressing Home from a browse screen would still pop a
+                // (frozen) PiP window.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    mainActivity.setPictureInPictureParams(
+                        PictureInPictureParams.Builder().setAutoEnterEnabled(false).build(),
+                    )
+                }
+            }
+        }
     }
 
     // Recoverable failures (failed seek, failed subtitle switch) — the
@@ -769,7 +863,10 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             playerView?.findViewById<TextView>(R.id.kw_player_title)?.text = title.orEmpty()
         }
 
-        indicator?.let { current ->
+        // Overlay chrome (gesture indicators, snackbars) has no place in
+        // the tiny PiP window — the video and subtitle overlays are all
+        // that should render there.
+        indicator?.takeIf { !isInPip }?.let { current ->
             val label = when (current) {
                 is GestureIndicator.Brightness -> "Brightness ${(current.value * 100).roundToInt()}%"
                 is GestureIndicator.Volume -> "Volume ${(current.value * 100).roundToInt()}%"
@@ -792,9 +889,11 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             }
         }
 
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
-        )
+        if (!isInPip) {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
+            )
+        }
     }
 }
