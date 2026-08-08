@@ -1,5 +1,6 @@
 package com.kolktech.kahawai.ui.home
 
+import android.content.res.Configuration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
@@ -32,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -41,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -78,6 +82,11 @@ fun HomeScreen(
     val state by viewModel.state.collectAsState()
     OnResumeEffect(viewModel::refresh)
     var menuExpanded by remember { mutableStateOf(false) }
+    // TV has no touchscreen to pull-to-refresh with (see the optional
+    // android.hardware.touchscreen feature in the manifest), so it gets an
+    // explicit reload button next to search instead.
+    val isTelevision = LocalConfiguration.current.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+        Configuration.UI_MODE_TYPE_TELEVISION
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -125,6 +134,15 @@ fun HomeScreen(
                     }
                 },
                 actions = {
+                    if (isTelevision) {
+                        IconButton(onClick = viewModel::refresh) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = stringResource(R.string.home_reload),
+                                tint = KahawaiOnSurfaceVariant,
+                            )
+                        }
+                    }
                     IconButton(onClick = onSearch) {
                         Icon(
                             Icons.Default.Search,
@@ -152,57 +170,69 @@ fun HomeScreen(
                     onSignInAgain = onSessionExpired,
                 )
                 is HomeState.Loaded -> {
-                    if (s.rows.isEmpty()) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(stringResource(R.string.home_no_libraries))
-                        }
-                    } else {
-                        // The very first poster on screen needs a D-pad
-                        // focus target the instant the grid appears —
-                        // otherwise there's nothing highlighted for a TV
-                        // remote to act on until the user presses a key.
-                        // PosterCard requests its own focus once composed
-                        // (see its focusRequester handling) rather than
-                        // this scope guessing when that's safe to do.
-                        val firstItemFocusRequester = remember { FocusRequester() }
+                    // Wraps both branches below (not just the grid) so the
+                    // empty-library state can also be pulled to refresh.
+                    // On TV isRefreshing is instead driven by the reload
+                    // button above — the box still shows the same small
+                    // top indicator, it just never sees a drag gesture
+                    // since the manifest marks touchscreen optional there.
+                    PullToRefreshBox(
+                        isRefreshing = s.isRefreshing,
+                        onRefresh = viewModel::refresh,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        if (s.rows.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(stringResource(R.string.home_no_libraries))
+                            }
+                        } else {
+                            // The very first poster on screen needs a D-pad
+                            // focus target the instant the grid appears —
+                            // otherwise there's nothing highlighted for a TV
+                            // remote to act on until the user presses a key.
+                            // PosterCard requests its own focus once composed
+                            // (see its focusRequester handling) rather than
+                            // this scope guessing when that's safe to do.
+                            val firstItemFocusRequester = remember { FocusRequester() }
 
-                        // Column count is derived once from the measured
-                        // width (so landscape/tablet fills the row instead
-                        // of showing two oversized posters), then reused
-                        // for every library's chunking below.
-                        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                            val columns = ((maxWidth + GRID_SPACING) / (POSTER_MIN_WIDTH + GRID_SPACING))
-                                .toInt()
-                                .coerceAtLeast(2)
-                            // Each grid row of ~[columns] posters is its own
-                            // LazyColumn item (not one item per whole
-                            // library) so scrolling a library into view
-                            // only has to compose/measure and kick off
-                            // Coil requests for the couple of poster rows
-                            // actually entering the viewport per frame,
-                            // rather than all ROW_SIZE posters in that
-                            // library at once — that all-at-once burst was
-                            // the cause of the scroll stutter.
-                            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                s.rows.forEachIndexed { rowIndex, row ->
-                                    item(key = "${row.library.id}-header") {
-                                        LibraryHeader(row, onOpenLibrary)
-                                    }
-                                    itemsIndexed(
-                                        row.items.chunked(columns),
-                                        key = { _, chunk -> "${row.library.id}-${chunk.first().id}" },
-                                    ) { chunkIndex, chunk ->
-                                        PosterGridRow(
-                                            chunk,
-                                            columns,
-                                            repo,
-                                            onOpenItem,
-                                            firstItemFocusRequester = if (rowIndex == 0 && chunkIndex == 0) {
-                                                firstItemFocusRequester
-                                            } else {
-                                                null
-                                            },
-                                        )
+                            // Column count is derived once from the measured
+                            // width (so landscape/tablet fills the row instead
+                            // of showing two oversized posters), then reused
+                            // for every library's chunking below.
+                            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                                val columns = ((maxWidth + GRID_SPACING) / (POSTER_MIN_WIDTH + GRID_SPACING))
+                                    .toInt()
+                                    .coerceAtLeast(2)
+                                // Each grid row of ~[columns] posters is its own
+                                // LazyColumn item (not one item per whole
+                                // library) so scrolling a library into view
+                                // only has to compose/measure and kick off
+                                // Coil requests for the couple of poster rows
+                                // actually entering the viewport per frame,
+                                // rather than all ROW_SIZE posters in that
+                                // library at once — that all-at-once burst was
+                                // the cause of the scroll stutter.
+                                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                    s.rows.forEachIndexed { rowIndex, row ->
+                                        item(key = "${row.library.id}-header") {
+                                            LibraryHeader(row, onOpenLibrary)
+                                        }
+                                        itemsIndexed(
+                                            row.items.chunked(columns),
+                                            key = { _, chunk -> "${row.library.id}-${chunk.first().id}" },
+                                        ) { chunkIndex, chunk ->
+                                            PosterGridRow(
+                                                chunk,
+                                                columns,
+                                                repo,
+                                                onOpenItem,
+                                                firstItemFocusRequester = if (rowIndex == 0 && chunkIndex == 0) {
+                                                    firstItemFocusRequester
+                                                } else {
+                                                    null
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }

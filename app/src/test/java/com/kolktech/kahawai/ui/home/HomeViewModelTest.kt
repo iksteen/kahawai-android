@@ -106,6 +106,9 @@ class HomeViewModelTest {
             )
             viewModel.refresh()
 
+            val refreshing = awaitItem() as HomeState.Loaded
+            assertTrue(refreshing.isRefreshing)
+
             val refreshed = awaitItem() as HomeState.Loaded
             assertEquals("Arrival 2", refreshed.rows[0].items[0].title)
         }
@@ -129,8 +132,12 @@ class HomeViewModelTest {
             server.enqueue(MockResponse().setResponseCode(500))
             viewModel.refresh()
 
+            val refreshing = awaitItem() as HomeState.Loaded
+            assertTrue(refreshing.isRefreshing)
+
+            val settled = awaitItem() as HomeState.Loaded
+            assertEquals(loaded, settled)
             expectNoEvents()
-            assertEquals(loaded, viewModel.state.value)
         }
     }
 }

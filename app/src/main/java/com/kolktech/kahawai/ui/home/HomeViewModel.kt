@@ -19,7 +19,7 @@ data class LibraryRow(val library: LibrarySummary, val items: List<Item>, val to
 sealed interface HomeState {
     data object Loading : HomeState
     data class Error(val message: String, val isAuthError: Boolean = false) : HomeState
-    data class Loaded(val rows: List<LibraryRow>) : HomeState
+    data class Loaded(val rows: List<LibraryRow>, val isRefreshing: Boolean = false) : HomeState
 }
 
 class HomeViewModel(private val repo: CatalogRepository) : ViewModel() {
@@ -42,18 +42,20 @@ class HomeViewModel(private val repo: CatalogRepository) : ViewModel() {
     }
 
     /// In-place re-fetch for an already-showing screen (back from the
-    /// player, app foregrounded) — keeps the current rows up instead of
-    /// dropping to the Loading spinner, so watch-progress bars update
-    /// without a flash or focus loss. The Loaded guard also skips the
-    /// ON_RESUME that fires during init{}'s own load. Best-effort: a
-    /// failure keeps what's shown.
+    /// player, app foregrounded, pull-to-refresh, TV reload button) —
+    /// keeps the current rows up instead of dropping to the Loading
+    /// spinner, so watch-progress bars update without a flash or focus
+    /// loss. The Loaded guard also skips the ON_RESUME that fires during
+    /// init{}'s own load. isRefreshing drives the pull-to-refresh
+    /// indicator; best-effort fetch keeps what's shown on failure.
     fun refresh() {
-        if (_state.value !is HomeState.Loaded) return
+        val current = _state.value as? HomeState.Loaded ?: return
+        _state.value = current.copy(isRefreshing = true)
         viewModelScope.launch {
-            try {
-                _state.value = HomeState.Loaded(fetchRows())
+            _state.value = try {
+                HomeState.Loaded(fetchRows())
             } catch (e: Exception) {
-                // Keep showing the rows we have.
+                current.copy(isRefreshing = false)
             }
         }
     }
