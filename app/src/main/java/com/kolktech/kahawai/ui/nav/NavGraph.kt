@@ -99,8 +99,11 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
     // included, so its route skips safeDrawingPadding entirely. The
     // window-level opt-in that actually lets content extend under the
     // cutout (layoutInDisplayCutoutMode) is the player's own to manage —
-    // see PlayerScreen's window DisposableEffect.
+    // see PlayerScreen's window DisposableEffect. The margin is also
+    // user-toggleable (AppSettingsScreen) for boxes that report a phantom
+    // cutout with nothing to actually avoid.
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+<<<<<<< Updated upstream
     val insetsModifier = if (currentRoute == Routes.PLAYER) modifier else modifier.safeDrawingPadding()
     // No animated transitions anywhere in the graph — every route cuts
     // instantly instead of the library's default 700ms cross-fade.
@@ -113,6 +116,14 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
         popEnterTransition = { EnterTransition.None },
         popExitTransition = { ExitTransition.None },
     ) {
+=======
+    val insetsModifier = if (currentRoute == Routes.PLAYER || !app.appSettingsStore.reserveNotchSpace) {
+        modifier
+    } else {
+        modifier.safeDrawingPadding()
+    }
+    NavHost(navController = navController, startDestination = start, modifier = insetsModifier) {
+>>>>>>> Stashed changes
         composable(Routes.SETUP) {
             ServerSetupScreen(
                 serverConfigStore = app.serverConfigStore,
@@ -151,6 +162,7 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
             AppSettingsScreen(
                 serverConfigStore = app.serverConfigStore,
                 tokenStore = app.tokenStore,
+                appSettingsStore = app.appSettingsStore,
                 onBack = { navController.popBackStack() },
                 onChangeServer = {
                     navController.navigate(Routes.SETUP) { popUpTo(0) { inclusive = true } }

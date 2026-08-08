@@ -8,17 +8,21 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.kolktech.kahawai.data.auth.ServerConfigStore
 import com.kolktech.kahawai.data.auth.TokenStore
 import com.kolktech.kahawai.data.network.ApiClient
+import com.kolktech.kahawai.data.settings.AppSettingsStore
 
 class KahawaiApp : Application(), SingletonImageLoader.Factory {
     lateinit var tokenStore: TokenStore
         private set
     lateinit var serverConfigStore: ServerConfigStore
         private set
+    lateinit var appSettingsStore: AppSettingsStore
+        private set
 
     override fun onCreate() {
         super.onCreate()
         tokenStore = TokenStore(this)
         serverConfigStore = ServerConfigStore(this)
+        appSettingsStore = AppSettingsStore(this)
         ApiClient.init(tokenStore, serverConfigStore)
     }
 

@@ -1,6 +1,7 @@
 package com.kolktech.kahawai.ui.settings
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,10 +13,16 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -23,6 +30,7 @@ import com.kolktech.kahawai.BuildConfig
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.auth.ServerConfigStore
 import com.kolktech.kahawai.data.auth.TokenStore
+import com.kolktech.kahawai.data.settings.AppSettingsStore
 import kotlinx.coroutines.launch
 
 /// App-local settings — hub address and app info. Distinct from
@@ -33,10 +41,12 @@ import kotlinx.coroutines.launch
 fun AppSettingsScreen(
     serverConfigStore: ServerConfigStore,
     tokenStore: TokenStore,
+    appSettingsStore: AppSettingsStore,
     onBack: () -> Unit,
     onChangeServer: () -> Unit,
 ) {
     val coroutineScope = rememberCoroutineScope()
+    var reserveNotchSpace by remember { mutableStateOf(appSettingsStore.reserveNotchSpace) }
 
     Scaffold(
         topBar = {
@@ -68,6 +78,35 @@ fun AppSettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.app_settings_change_server))
+            }
+
+            Text(
+                stringResource(R.string.app_settings_display),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 32.dp),
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.app_settings_reserve_notch_space),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        stringResource(R.string.app_settings_reserve_notch_space_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = reserveNotchSpace,
+                    onCheckedChange = {
+                        reserveNotchSpace = it
+                        appSettingsStore.reserveNotchSpace = it
+                    },
+                )
             }
 
             Text(

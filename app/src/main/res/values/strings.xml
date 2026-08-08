@@ -87,6 +87,9 @@
     <string name="app_settings_hub_server">Hub server</string>
     <string name="app_settings_not_configured">not configured</string>
     <string name="app_settings_change_server">Change server</string>
+    <string name="app_settings_display">Display</string>
+    <string name="app_settings_reserve_notch_space">Reserve space for camera notch</string>
+    <string name="app_settings_reserve_notch_space_hint">Turn off if your screen reports a notch that isn\'t really there</string>
     <string name="app_settings_about">About</string>
     <string name="app_settings_version">kahawai %1$s</string>
 
