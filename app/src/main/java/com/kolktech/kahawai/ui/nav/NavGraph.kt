@@ -103,8 +103,11 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
     // user-toggleable (AppSettingsScreen) for boxes that report a phantom
     // cutout with nothing to actually avoid.
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
-<<<<<<< Updated upstream
-    val insetsModifier = if (currentRoute == Routes.PLAYER) modifier else modifier.safeDrawingPadding()
+    val insetsModifier = if (currentRoute == Routes.PLAYER || !app.appSettingsStore.reserveNotchSpace) {
+        modifier
+    } else {
+        modifier.safeDrawingPadding()
+    }
     // No animated transitions anywhere in the graph — every route cuts
     // instantly instead of the library's default 700ms cross-fade.
     NavHost(
@@ -116,14 +119,6 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
         popEnterTransition = { EnterTransition.None },
         popExitTransition = { ExitTransition.None },
     ) {
-=======
-    val insetsModifier = if (currentRoute == Routes.PLAYER || !app.appSettingsStore.reserveNotchSpace) {
-        modifier
-    } else {
-        modifier.safeDrawingPadding()
-    }
-    NavHost(navController = navController, startDestination = start, modifier = insetsModifier) {
->>>>>>> Stashed changes
         composable(Routes.SETUP) {
             ServerSetupScreen(
                 serverConfigStore = app.serverConfigStore,
