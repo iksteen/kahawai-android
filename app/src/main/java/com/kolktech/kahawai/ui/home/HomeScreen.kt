@@ -15,12 +15,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -66,13 +64,10 @@ private val GRID_SPACING = 10.dp
 @Composable
 fun HomeScreen(
     repo: CatalogRepository,
-    isAdmin: Boolean,
     onOpenItem: (String) -> Unit,
     onOpenLibrary: (id: String, name: String) -> Unit,
     onSearch: () -> Unit,
-    onOpenAppSettings: () -> Unit,
-    onOpenServerSettings: () -> Unit,
-    onOpenAdmin: () -> Unit,
+    onOpenSettings: () -> Unit,
     onLogout: () -> Unit,
     onSessionExpired: () -> Unit,
 ) {
@@ -109,22 +104,10 @@ fun HomeScreen(
                     // anchored to a focusable IconButton.
                     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.home_app_settings)) },
+                            text = { Text(stringResource(R.string.home_settings)) },
                             leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                            onClick = { menuExpanded = false; onOpenAppSettings() },
+                            onClick = { menuExpanded = false; onOpenSettings() },
                         )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.home_server_settings)) },
-                            leadingIcon = { Icon(Icons.Default.Storage, contentDescription = null) },
-                            onClick = { menuExpanded = false; onOpenServerSettings() },
-                        )
-                        if (isAdmin) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.home_admin)) },
-                                leadingIcon = { Icon(Icons.Default.AdminPanelSettings, contentDescription = null) },
-                                onClick = { menuExpanded = false; onOpenAdmin() },
-                            )
-                        }
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.home_log_out)) },

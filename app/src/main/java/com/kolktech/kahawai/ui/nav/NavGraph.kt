@@ -1,8 +1,16 @@
 package com.kolktech.kahawai.ui.nav
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
+import android.os.Build
+import android.view.WindowManager
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -13,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.navigation.NavHostController
@@ -33,16 +42,36 @@ import com.kolktech.kahawai.ui.library.LibraryScreen
 import com.kolktech.kahawai.ui.login.LoginScreen
 import com.kolktech.kahawai.ui.player.PlayerScreen
 import com.kolktech.kahawai.ui.search.SearchScreen
-import com.kolktech.kahawai.ui.settings.AppSettingsScreen
+import com.kolktech.kahawai.ui.settings.AboutScreen
+import com.kolktech.kahawai.ui.settings.CacheSettingsScreen
+import com.kolktech.kahawai.ui.settings.InterfaceSettingsScreen
+import com.kolktech.kahawai.ui.settings.LanguageSettingsScreen
+import com.kolktech.kahawai.ui.settings.NetworkSettingsScreen
+import com.kolktech.kahawai.ui.settings.PlayerSettingsScreen
+import com.kolktech.kahawai.ui.settings.SeekingSettingsScreen
 import com.kolktech.kahawai.ui.settings.ServerSettingsScreen
+import com.kolktech.kahawai.ui.settings.SettingsScreen
 import com.kolktech.kahawai.ui.setup.ServerSetupScreen
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 private object Routes {
     const val SETUP = "setup"
     const val LOGIN = "login"
     const val HOME = "home"
     const val SEARCH = "search"
-    const val APP_SETTINGS = "app_settings"
+    const val SETTINGS = "settings"
+    const val SETTINGS_LANGUAGE = "settings_language"
+    const val SETTINGS_INTERFACE = "settings_interface"
+    const val SETTINGS_PLAYER = "settings_player"
+    const val SETTINGS_PLAYER_SEEKING = "settings_player_seeking"
+    const val SETTINGS_NETWORK = "settings_network"
+    const val SETTINGS_CACHE = "settings_cache"
+    const val SETTINGS_ABOUT = "settings_about"
     const val SERVER_SETTINGS = "server_settings"
     const val ADMIN = "admin"
     const val LIBRARY = "library/{libraryId}?name={name}"
@@ -96,17 +125,58 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
 
     // Every screen keeps out of the display cutout (and any visible bars)
     // EXCEPT the player: video should use the whole panel, cutout
-    // included, so its route skips safeDrawingPadding entirely. The
-    // window-level opt-in that actually lets content extend under the
-    // cutout (layoutInDisplayCutoutMode) is the player's own to manage —
-    // see PlayerScreen's window DisposableEffect. The margin is also
-    // user-toggleable (AppSettingsScreen) for boxes that report a phantom
-    // cutout with nothing to actually avoid.
+    // included, so its route skips safeDrawingPadding entirely.
+    //
+    // Compose's safeDrawingPadding() below only controls content padding
+    // *inside* the window — it does nothing about whether the window
+    // itself is allowed to draw into the cutout area at all. That's a
+    // separate, window-level permission (layoutInDisplayCutoutMode),
+    // which Android only grants when explicitly set to SHORT_EDGES/ALWAYS;
+    // left at the default, the system reserves a margin around the
+    // cutout regardless of what Compose does. So reserveNotchSpace has to
+    // toggle both: the window's cutout mode here (skipped on the player's
+    // own route, which always forces SHORT_EDGES for the duration of
+    // playback via its own DisposableEffect, then restores whatever this
+    // effect had set) and the Compose-side padding below.
+    //
+    // Held as Compose state here (rather than read straight from the
+    // store each time) so InterfaceSettingsScreen flipping it recomposes
+    // this graph immediately — both effects below rerun on the same
+    // frame, on whatever screen is currently showing, instead of only
+    // taking effect after the next route change.
+    var reserveNotchSpace by remember { mutableStateOf(app.appSettingsStore.reserveNotchSpace) }
+    val onReserveNotchSpaceChange: (Boolean) -> Unit = {
+        reserveNotchSpace = it
+        app.appSettingsStore.reserveNotchSpace = it
+    }
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
-    val insetsModifier = if (currentRoute == Routes.PLAYER || !app.appSettingsStore.reserveNotchSpace) {
-        modifier
-    } else {
-        modifier.safeDrawingPadding()
+    val context = LocalContext.current
+    LaunchedEffect(currentRoute, reserveNotchSpace) {
+        if (currentRoute != Routes.PLAYER && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            context.findActivity()?.window?.let { window ->
+                window.attributes = window.attributes.apply {
+                    layoutInDisplayCutoutMode = if (reserveNotchSpace) {
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    } else {
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    }
+                }
+            }
+        }
+    }
+    // safeDrawingPadding() both pads AND consumes the safeDrawing insets,
+    // so screens further down the tree (a Scaffold's TopAppBar, which
+    // reserves this same inset by default) see nothing left to pad for
+    // and don't add their own margin on top. Turning the setting off has
+    // to consume those insets too — with a bare `modifier` here, every
+    // Scaffold-based screen would just fall back to applying its own
+    // default inset padding, and the toggle would look like it does
+    // nothing on any screen with a TopAppBar (only screens with no
+    // Scaffold at all, e.g. Detail, would visibly react).
+    val insetsModifier = when {
+        currentRoute == Routes.PLAYER -> modifier
+        reserveNotchSpace -> modifier.safeDrawingPadding()
+        else -> modifier.consumeWindowInsets(WindowInsets.safeDrawing)
     }
     // No animated transitions anywhere in the graph — every route cuts
     // instantly instead of the library's default 700ms cross-fade.
@@ -140,29 +210,71 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
         composable(Routes.HOME) {
             HomeScreen(
                 repo = catalogRepository,
-                isAdmin = app.tokenStore.isAdmin,
                 onOpenItem = { itemId -> navController.navigate(Routes.detail(itemId)) },
                 onOpenLibrary = { id, name -> navController.navigate(Routes.library(id, name)) },
                 onSearch = { navController.navigate(Routes.SEARCH) },
-                onOpenAppSettings = { navController.navigate(Routes.APP_SETTINGS) },
-                onOpenServerSettings = { navController.navigate(Routes.SERVER_SETTINGS) },
-                onOpenAdmin = { navController.navigate(Routes.ADMIN) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 // Same effect as an expired session: clear tokens, pop back
                 // to a fresh Login.
                 onLogout = onSessionExpired,
                 onSessionExpired = onSessionExpired,
             )
         }
-        composable(Routes.APP_SETTINGS) {
-            AppSettingsScreen(
+        composable(Routes.SETTINGS) {
+            SettingsScreen(
+                isAdmin = app.tokenStore.isAdmin,
+                onBack = { navController.popBackStack() },
+                onOpenLanguage = { navController.navigate(Routes.SETTINGS_LANGUAGE) },
+                onOpenInterface = { navController.navigate(Routes.SETTINGS_INTERFACE) },
+                onOpenPlayer = { navController.navigate(Routes.SETTINGS_PLAYER) },
+                onOpenNetwork = { navController.navigate(Routes.SETTINGS_NETWORK) },
+                onOpenServerSettings = { navController.navigate(Routes.SERVER_SETTINGS) },
+                onOpenAdmin = { navController.navigate(Routes.ADMIN) },
+                onOpenCache = { navController.navigate(Routes.SETTINGS_CACHE) },
+                onOpenAbout = { navController.navigate(Routes.SETTINGS_ABOUT) },
+            )
+        }
+        composable(Routes.SETTINGS_LANGUAGE) {
+            LanguageSettingsScreen(
+                appSettingsStore = app.appSettingsStore,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.SETTINGS_INTERFACE) {
+            InterfaceSettingsScreen(
+                reserveNotchSpace = reserveNotchSpace,
+                onReserveNotchSpaceChange = onReserveNotchSpaceChange,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.SETTINGS_PLAYER) {
+            PlayerSettingsScreen(
+                appSettingsStore = app.appSettingsStore,
+                onBack = { navController.popBackStack() },
+                onOpenSeeking = { navController.navigate(Routes.SETTINGS_PLAYER_SEEKING) },
+            )
+        }
+        composable(Routes.SETTINGS_PLAYER_SEEKING) {
+            SeekingSettingsScreen(
+                appSettingsStore = app.appSettingsStore,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(Routes.SETTINGS_NETWORK) {
+            NetworkSettingsScreen(
                 serverConfigStore = app.serverConfigStore,
                 tokenStore = app.tokenStore,
-                appSettingsStore = app.appSettingsStore,
                 onBack = { navController.popBackStack() },
                 onChangeServer = {
                     navController.navigate(Routes.SETUP) { popUpTo(0) { inclusive = true } }
                 },
             )
+        }
+        composable(Routes.SETTINGS_CACHE) {
+            CacheSettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS_ABOUT) {
+            AboutScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.SERVER_SETTINGS) {
             ServerSettingsScreen(
@@ -234,6 +346,7 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
             PlayerScreen(
                 itemId = itemId,
                 startMs = startMs,
+                appSettingsStore = app.appSettingsStore,
                 initialAudioTrack = audioTrack,
                 initialSubtitleTrackId = subtitleTrack.takeIf { it >= 0 },
                 onClose = { navController.popBackStack() },

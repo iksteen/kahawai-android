@@ -79,6 +79,7 @@ import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.dto.displayLabel
 import com.kolktech.kahawai.data.repository.PlaybackRepository
+import com.kolktech.kahawai.data.settings.AppSettingsStore
 import com.kolktech.kahawai.ui.MainActivity
 import com.kolktech.kahawai.ui.player.subtitle.AssSubtitleOverlay
 import com.kolktech.kahawai.ui.player.subtitle.ImageSubtitleOverlay
@@ -109,6 +110,7 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 fun PlayerScreen(
     itemId: String,
     startMs: Long,
+    appSettingsStore: AppSettingsStore,
     onClose: () -> Unit,
     onNextEpisode: (itemId: String, subtitleTrackId: Long?) -> Unit = { _, _ -> },
     initialAudioTrack: Int = 0,
@@ -214,7 +216,7 @@ fun PlayerScreen(
                     Text(stringResource(R.string.kw_back))
                 }
             }
-            is PlayerState.Ready -> PlayerContent(viewModel, closeAndPause)
+            is PlayerState.Ready -> PlayerContent(viewModel, appSettingsStore, closeAndPause)
         }
     }
 }
@@ -237,13 +239,14 @@ private class TouchState {
     var pinchActive = false
     var pinchScale = 1f
 
-    // Double-tap-to-seek chain: the first double tap seeks 5s, every
-    // further quick tap grows the same chain by 2.5s (2 taps = 5s,
-    // 6 taps = 15s). Targets are computed from the position captured at
-    // chain start, not currentPosition, because each hub seek is an async
-    // round trip that supersedes the previous one — reading
-    // currentPosition mid-chain would see a position no tap has landed
-    // on yet.
+    // Double-tap-to-seek chain: the first double tap seeks by the
+    // configured seek-back/seek-forward increment (Settings > Player >
+    // Seeking), and every further quick tap in the same direction grows
+    // the chain by another increment. Targets are computed from the
+    // position captured at chain start, not currentPosition, because each
+    // hub seek is an async round trip that supersedes the previous one —
+    // reading currentPosition mid-chain would see a position no tap has
+    // landed on yet.
     var seekChainMs = 0L
     var seekChainBasisMs = 0L
     var seekForward = true
@@ -252,9 +255,6 @@ private class TouchState {
     var lastTapUpTime = 0L
     var pendingControllerToggle: Job? = null
 }
-
-private const val SEEK_FIRST_TAP_MS = 5_000L
-private const val SEEK_EXTRA_TAP_MS = 2_500L
 
 /// How long after the last seek-tap another tap still extends the chain
 /// (also how long the seek indicator stays up, so the indicator being
@@ -266,7 +266,7 @@ private const val SEEK_CHAIN_WINDOW_MS = 800L
 private const val TV_BACK_EXIT_WINDOW_MS = 1_000L
 
 @Composable
-private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
+private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSettingsStore, onClose: () -> Unit) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val audioManager = remember(context) {
@@ -276,9 +276,23 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
         audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
     }
 
+    // Read once at player open — these are settings-screen toggles, not
+    // values that change out from under an already-open player. The
+    // master switch gates every individual gesture regardless of its own
+    // stored value (Settings screen greys the sub-toggles out for the
+    // same reason).
+    val gesturesEnabled = remember { appSettingsStore.playerGesturesEnabled }
+    val volumeBrightnessGestureEnabled = remember { gesturesEnabled && appSettingsStore.volumeBrightnessGestureEnabled }
+    val seekGestureEnabled = remember { gesturesEnabled && appSettingsStore.seekGestureEnabled }
+    val zoomGestureEnabled = remember { gesturesEnabled && appSettingsStore.zoomGestureEnabled }
+    val rememberBrightnessLevel = remember { appSettingsStore.rememberBrightnessLevel }
+    val seekBackMs = remember { appSettingsStore.seekBackMs }
+    val seekForwardMs = remember { appSettingsStore.seekForwardMs }
+
     var brightness by remember {
         mutableFloatStateOf(
-            activity?.window?.attributes?.screenBrightness?.takeIf { it in 0f..1f }
+            appSettingsStore.lastBrightnessLevel.takeIf { rememberBrightnessLevel && it in 0f..1f }
+                ?: activity?.window?.attributes?.screenBrightness?.takeIf { it in 0f..1f }
                 ?: (Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128) / 255f),
         )
     }
@@ -444,6 +458,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
     fun applyBrightness(value: Float) {
         brightness = value
         activity?.window?.let { window -> window.attributes = window.attributes.apply { screenBrightness = value } }
+        if (rememberBrightnessLevel) appSettingsStore.lastBrightnessLevel = value
         flash(GestureIndicator.Brightness(value))
     }
 
@@ -648,15 +663,25 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                     val now = e.eventTime
                     val forward = e.x >= view.width / 2f
 
+                    if (!seekGestureEnabled) {
+                        touchState.lastTapUpTime = now
+                        touchState.pendingControllerToggle?.cancel()
+                        touchState.pendingControllerToggle = scope.launch {
+                            delay(doubleTapTimeoutMs)
+                            playerView?.performClick()
+                        }
+                        return true
+                    }
+
                     // Tap while the seek indicator is still up: extend the
                     // running chain (or flip it if the side changed).
                     if (touchState.seekChainMs > 0 && now - touchState.lastSeekTapTime <= SEEK_CHAIN_WINDOW_MS) {
                         if (forward != touchState.seekForward) {
                             touchState.seekForward = forward
-                            touchState.seekChainMs = SEEK_FIRST_TAP_MS
+                            touchState.seekChainMs = if (forward) seekForwardMs else seekBackMs
                             touchState.seekChainBasisMs = viewModel.player.currentPosition
                         } else {
-                            touchState.seekChainMs += SEEK_EXTRA_TAP_MS
+                            touchState.seekChainMs += if (forward) seekForwardMs else seekBackMs
                         }
                         touchState.lastSeekTapTime = now
                         performChainSeek(touchState)
@@ -670,7 +695,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                         touchState.pendingControllerToggle = null
                         touchState.lastTapUpTime = 0
                         touchState.seekForward = forward
-                        touchState.seekChainMs = SEEK_FIRST_TAP_MS
+                        touchState.seekChainMs = if (forward) seekForwardMs else seekBackMs
                         touchState.seekChainBasisMs = viewModel.player.currentPosition
                         touchState.lastSeekTapTime = now
                         performChainSeek(touchState)
@@ -694,6 +719,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                 }
 
                 override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+                    if (!volumeBrightnessGestureEnabled) return true
                     val view = playerView ?: return true
                     val start = e1 ?: return true
                     val height = view.height.takeIf { it > 0 } ?: return true
@@ -751,6 +777,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
                 }
 
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    if (!zoomGestureEnabled) return true
                     touchState.pinchScale *= detector.scaleFactor
                     // Resolved off the attached PlayerView's own context
                     // (mirrors menuContext elsewhere in this file) rather

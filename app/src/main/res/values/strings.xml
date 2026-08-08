@@ -32,9 +32,7 @@
     <!-- Home -->
     <string name="home_menu">Menu</string>
     <string name="home_reload">Reload</string>
-    <string name="home_app_settings">App settings</string>
-    <string name="home_server_settings">Server settings</string>
-    <string name="home_admin">Admin</string>
+    <string name="home_settings">Settings</string>
     <string name="home_log_out">Log out</string>
     <string name="home_no_libraries">No libraries yet. Connect a mediahost to the hub.</string>
     <string name="home_see_all">see all (%1$d)</string>
@@ -82,16 +80,70 @@
     <string name="setup_invalid_address">That doesn\'t look like a valid http:// or https:// address</string>
     <string name="setup_unreachable">Couldn\'t reach %1$s: %2$s</string>
 
-    <!-- App settings -->
-    <string name="app_settings_title">App settings</string>
-    <string name="app_settings_hub_server">Hub server</string>
-    <string name="app_settings_not_configured">not configured</string>
-    <string name="app_settings_change_server">Change server</string>
-    <string name="app_settings_display">Display</string>
-    <string name="app_settings_reserve_notch_space">Reserve space for camera notch</string>
-    <string name="app_settings_reserve_notch_space_hint">Turn off if your screen reports a notch that isn\'t really there</string>
-    <string name="app_settings_about">About</string>
-    <string name="app_settings_version">kahawai %1$s</string>
+    <!-- Settings hub -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_language_desc">App display language</string>
+    <string name="settings_interface">Interface</string>
+    <string name="settings_interface_desc">Display and layout</string>
+    <string name="settings_player">Player</string>
+    <string name="settings_player_desc">Gestures and seeking</string>
+    <string name="settings_network">Network</string>
+    <string name="settings_network_desc">Hub server and connection</string>
+    <string name="settings_server_settings">Server settings</string>
+    <string name="settings_server_settings_desc">OpenSubtitles account, bandwidth cap, subtitle fallback order</string>
+    <string name="settings_server_admin_settings">Server admin settings</string>
+    <string name="settings_server_admin_settings_desc">Libraries, mediahosts, metadata providers, active sessions</string>
+    <string name="settings_cache">Cache</string>
+    <string name="settings_cache_desc">Downloaded and buffered media</string>
+    <string name="settings_about">About</string>
+    <string name="settings_about_desc">Version and app info</string>
+
+    <!-- Interface settings -->
+    <string name="interface_settings_title">Interface</string>
+    <string name="settings_reserve_notch_space">Reserve space for camera notch</string>
+    <string name="settings_reserve_notch_space_hint">Turn off if your screen reports a notch that isn\'t really there</string>
+
+    <!-- Language settings -->
+    <string name="language_settings_title">Language</string>
+    <string name="language_settings_app_language">App language</string>
+    <string name="language_settings_english">English</string>
+
+    <!-- Player settings -->
+    <string name="player_settings_title">Player</string>
+    <string name="player_settings_gestures">Gestures</string>
+    <string name="player_settings_gestures_enabled">Player gestures</string>
+    <string name="player_settings_gestures_enabled_hint">When off, every quick gesture below is disabled</string>
+    <string name="player_settings_volume_brightness">Volume and brightness gestures</string>
+    <string name="player_settings_volume_brightness_hint">Swipe up and down on the right side of the screen to change the volume and on the left side to change the brightness</string>
+    <string name="player_settings_seek_gesture">Seek gesture</string>
+    <string name="player_settings_seek_gesture_hint">Double-tap the left or right side of the screen to seek backwards or forwards</string>
+    <string name="player_settings_zoom_gesture">Zoom gesture</string>
+    <string name="player_settings_zoom_gesture_hint">Pinch to fill the screen with the video</string>
+    <string name="player_settings_remember_brightness">Remember brightness level</string>
+    <string name="player_settings_remember_brightness_hint">Keep the brightness level you set in the player between sessions</string>
+    <string name="player_settings_seeking">Seeking</string>
+    <string name="player_settings_seeking_desc">Back %1$ss · Forward %2$ss</string>
+
+    <!-- Seeking settings -->
+    <string name="seeking_settings_title">Seeking</string>
+    <string name="seeking_settings_back_increment">Seek back increment</string>
+    <string name="seeking_settings_forward_increment">Seek forward increment</string>
+    <string name="seeking_settings_ms_suffix">ms</string>
+
+    <!-- Network settings -->
+    <string name="network_settings_title">Network</string>
+    <string name="network_settings_hub_server">Hub server</string>
+    <string name="network_settings_not_configured">not configured</string>
+    <string name="network_settings_change_server">Change server</string>
+
+    <!-- Cache settings -->
+    <string name="cache_settings_title">Cache</string>
+    <string name="cache_settings_placeholder">Cache settings are coming soon.</string>
+
+    <!-- About -->
+    <string name="about_title">About</string>
+    <string name="about_version">kahawai %1$s</string>
 
     <!-- Server (per-user hub) settings -->
     <string name="server_settings_title">Server settings</string>
