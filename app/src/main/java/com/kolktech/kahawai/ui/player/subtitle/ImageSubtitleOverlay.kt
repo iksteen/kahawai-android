@@ -121,7 +121,10 @@ internal fun shiftBottomOverflowIntoView(dsts: List<RectF>, containerH: Float) {
 
 /// PGS/VobSub ("overlay" delivery): the session tap streams decoded
 /// display sets — {"s","cw","ch","o":[{"x","y","png"}]} — composited here
-/// on a Compose Canvas, mirroring web/src/views/Player.tsx:339-468. The
+/// on a Compose Canvas, mirroring web/src/views/Player.tsx:339-468.
+/// "raster" tracks (HUB-32d) share this same wire shape but are fetched
+/// whole from an item-scoped endpoint instead — see the source-selection
+/// comment in the LaunchedEffect below. The
 /// video-pixel-space intermediate step the web client uses (canvas
 /// backed at `videoWidth`x`videoHeight`, then CSS-scaled onto the
 /// letterboxed box) collapses here into one direct scale from
@@ -132,6 +135,7 @@ internal fun shiftBottomOverflowIntoView(dsts: List<RectF>, containerH: Float) {
 @Composable
 fun ImageSubtitleOverlay(
     player: Player,
+    itemId: String,
     track: SubtitleTrack,
     subtitleSession: SubtitleSession,
     resizeMode: Int,
@@ -141,7 +145,35 @@ fun ImageSubtitleOverlay(
     var currentSet by remember(subtitleSession.epoch, track.id) { mutableStateOf<DisplaySet?>(null) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(subtitleSession.epoch, track.id) {
-        val url = "${subtitleSession.streamBaseUrl}subs-${track.id}.jsonl"
+        // A "raster" track (HUB-32d: a typeset ASS script rendered to
+        // display sets) is served item-level and whole — no session
+        // involved, same NDJSON shape as a PGS/VobSub tap — so it's
+        // fetched once, like AssSubtitleOverlay's own whole-file
+        // fallback. A real embedded PGS/VobSub track only exists as a
+        // SESSION tap, and only while that session actually has a
+        // remux/transcode pipeline to tap from: the hub's session_file
+        // handler no-ops the tap outright for Mode::Direct sessions (a
+        // raw byte-range file has no server-side pipeline), the same
+        // gate AssSubtitleOverlay applies for its own session tap. There
+        // is no whole-file fallback for a genuine embedded image track
+        // — the hub's item-scoped `.jsonl` route only answers for
+        // origin=="raster" (crates/kahawai-hub/src/api.rs
+        // item_subtitle_file) — so Direct mode simply has no source for
+        // it; connecting anyway would just retry a tap that provably
+        // never produces anything.
+        val (url, maxAttempts) = when {
+            track.origin == "raster" ->
+                "${ApiClient.baseUrl().trimEnd('/')}/api/v1/items/$itemId/subtitles/${track.id}.jsonl" to 1
+            subtitleSession.isHls && track.origin == "embedded" ->
+                "${subtitleSession.streamBaseUrl}subs-${track.id}.jsonl" to 3
+            else -> {
+                Log.w(
+                    TAG,
+                    "overlay delivery has no source for track=${track.id} origin=${track.origin} isHls=${subtitleSession.isHls}",
+                )
+                return@LaunchedEffect
+            }
+        }
         withContext(Dispatchers.IO) {
             val client = ApiClient.authenticatedOkHttpClient().newBuilder()
                 // This is a long-lived, growing stream — must not time
@@ -153,9 +185,12 @@ fun ImageSubtitleOverlay(
             // epoch bump) can race that window — a one-shot miss here
             // used to mean subtitles silently never came back until the
             // next seek or track switch. Retry the CONNECTION a few
-            // times (same 3x/700ms shape as syncOrigin), but only while
-            // nothing has arrived yet — once the stream has proven
-            // itself, an EOF is the hub deliberately closing it.
+            // times (same 3x/700ms shape as syncOrigin) for the session
+            // tap, but only while nothing has arrived yet — once the
+            // stream has proven itself, an EOF is the hub deliberately
+            // closing it. The whole-file raster fetch has nothing to
+            // race (item-level, complete before the first byte), so it
+            // gets a single attempt.
             var attempt = 0
             var gotAnything = false
             while (isActive) {
@@ -204,7 +239,7 @@ fun ImageSubtitleOverlay(
                 } finally {
                     cancelHandle.dispose()
                 }
-                if (gotAnything || ++attempt >= 3) break
+                if (gotAnything || ++attempt >= maxAttempts) break
                 delay(700)
             }
         }

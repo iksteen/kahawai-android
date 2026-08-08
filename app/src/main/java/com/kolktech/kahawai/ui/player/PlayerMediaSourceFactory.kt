@@ -21,20 +21,26 @@ import androidx.media3.extractor.text.SubtitleExtractor
 import androidx.annotation.OptIn
 
 /// See [buildPlayerMediaSourceFactory]. Media3's own default is
-/// 3.5 (DefaultHlsPlaylistTracker.DEFAULT_PLAYLIST_STUCK_TARGET_DURATION_COEFFICIENT).
+/// 3.5 (DefaultHlsPlaylistTracker.DEFAULT_PLAYLIST_STUCK_TARGET_DURATION_COEFFICIENT,
+/// ~7s at the hub's 2s segment target duration).
 ///
-/// A raised-but-still-finite coefficient (30.0, ~60s) was tried first and
-/// still failed on a seek far ahead — but the SAME hub, same seek, same
-/// content played correctly in the web client, which proves the hub's
-/// pipeline isn't the problem. web/src/views/Player.tsx's hls.js config
-/// doesn't give its analogous check a longer timeout either — it disables
-/// it outright: `liveMaxLatencyDurationCount: Infinity`. This mirrors
-/// that exactly rather than guessing at a bigger-but-still-wrong finite
-/// number a second time. (now - lastSnapshotChangeMs) > targetDurationMs
-/// * COEFFICIENT: multiplying by Double.MAX_VALUE overflows the right
-/// side to +Infinity under IEEE 754 (no crash, no NaN), and elapsed real
-/// time is never greater than infinity, so the check can never fire.
-private const val HLS_PLAYLIST_STUCK_COEFFICIENT = Double.MAX_VALUE
+/// History: 30.0 (~60s) still failed on a deep seek into a large file —
+/// slow pipeline restart, not a dead one — which for a while meant this
+/// was disabled outright (Double.MAX_VALUE, overflowing the comparison
+/// to +Infinity). That traded the false positive for an unbounded one: a
+/// session whose pipeline actually died (worker crash) hung forever with
+/// no PlaylistStuckException and no onPlayerError. A hub-side fix has
+/// since resolved the slow-restart latency that 60s wasn't covering, so
+/// the wide margin is no longer needed: 5.0 (~10s) fails fast — a couple
+/// of segment intervals of slack for ordinary jitter, not minutes — while
+/// still being finite. Each seek-restart rebuilds the MediaItem via
+/// attach() (PlayerViewModel.handleSeek -> attach), which means a fresh
+/// HlsMediaSource/DefaultHlsPlaylistTracker per seek, so this window
+/// always starts counting from that restart. If slow restarts reappear
+/// (a different hub, a heavier transcode), raise this again rather than
+/// re-disabling it outright. (now - lastSnapshotChangeMs) >
+/// targetDurationMs * COEFFICIENT.
+private const val HLS_PLAYLIST_STUCK_COEFFICIENT = 5.0
 
 /// What the UI (PlayerView / its built-in controller) should hold.
 /// Media3's default HLS playlist-stuck tolerance

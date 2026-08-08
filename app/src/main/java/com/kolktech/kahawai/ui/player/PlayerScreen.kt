@@ -854,6 +854,7 @@ private fun PlayerContent(viewModel: PlayerViewModel, onClose: () -> Unit) {
             when (selectedSubtitle?.delivery) {
                 "overlay" -> ImageSubtitleOverlay(
                     player = viewModel.player,
+                    itemId = viewModel.itemId,
                     track = selectedSubtitle!!,
                     subtitleSession = activeSession,
                     resizeMode = RESIZE_MODES[resizeModeIndex].first,

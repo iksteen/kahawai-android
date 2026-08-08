@@ -25,6 +25,21 @@ object ApiClient {
     private lateinit var tokenStore: TokenStore
     private lateinit var serverConfigStore: ServerConfigStore
 
+    /// Guards every field below. [reset] runs on the main thread when
+    /// the user changes servers, while the cache-or-build accessors
+    /// (private `plainClient()`/`authClient()`/etc.) are read from
+    /// arbitrary threads — OkHttp's dispatcher (interceptors, and
+    /// [TokenAuthenticator]'s refresh callback, which calls
+    /// [plainApiService]) as well as whatever coroutine dispatcher a
+    /// repository call happens to run on. Without a shared lock, reset()
+    /// nulling these fields could interleave with another thread's
+    /// read-null-then-build sequence: the reader either caches a second,
+    /// divergent client/retrofit instance or — worse — finishes building
+    /// against the base URL that was just invalidated. synchronized is
+    /// reentrant per-thread, so accessors that call each other (e.g.
+    /// authRetrofit() -> authClient()) nest safely, and every builder
+    /// call is cheap (no I/O under the lock), so contention is a non-issue.
+    private val lock = Any()
     private var plainClient: OkHttpClient? = null
     private var authClient: OkHttpClient? = null
     private var plainRetrofit: Retrofit? = null
@@ -35,7 +50,7 @@ object ApiClient {
         this.serverConfigStore = serverConfigStore
     }
 
-    fun reset() {
+    fun reset() = synchronized(lock) {
         plainClient = null
         authClient = null
         plainRetrofit = null
@@ -110,16 +125,16 @@ object ApiClient {
         level = HttpLoggingInterceptor.Level.BASIC
     }
 
-    private fun plainClient(): OkHttpClient {
-        return plainClient ?: OkHttpClient.Builder()
+    private fun plainClient(): OkHttpClient = synchronized(lock) {
+        plainClient ?: OkHttpClient.Builder()
             .apply { if (BuildConfig.DEBUG) addInterceptor(loggingInterceptor()) }
             .connectTimeout(10, TimeUnit.SECONDS)
             .build()
             .also { plainClient = it }
     }
 
-    private fun authClient(): OkHttpClient {
-        return authClient ?: OkHttpClient.Builder()
+    private fun authClient(): OkHttpClient = synchronized(lock) {
+        authClient ?: OkHttpClient.Builder()
             .addInterceptor(AuthInterceptor(tokenStore))
             .apply { if (BuildConfig.DEBUG) addInterceptor(loggingInterceptor()) }
             .authenticator(TokenAuthenticator(tokenStore) { plainApiService() })
@@ -128,11 +143,13 @@ object ApiClient {
             .also { authClient = it }
     }
 
-    private fun plainRetrofit(): Retrofit =
+    private fun plainRetrofit(): Retrofit = synchronized(lock) {
         plainRetrofit ?: buildRetrofit(plainClient(), baseUrl()).also { plainRetrofit = it }
+    }
 
-    private fun authRetrofit(): Retrofit =
+    private fun authRetrofit(): Retrofit = synchronized(lock) {
         authRetrofit ?: buildRetrofit(authClient(), baseUrl()).also { authRetrofit = it }
+    }
 
     private fun buildRetrofit(client: OkHttpClient, baseUrl: String): Retrofit =
         Retrofit.Builder()
