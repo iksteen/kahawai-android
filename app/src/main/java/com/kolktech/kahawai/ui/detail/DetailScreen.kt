@@ -598,6 +598,13 @@ private fun ChildRow(child: Item, onOpenItem: (String) -> Unit, focusRequester: 
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
             )
+        } else {
+            WatchProgressBar(
+                positionMs = child.resumePositionMs,
+                durationMs = child.resumeDurationMs,
+                played = child.played,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }
