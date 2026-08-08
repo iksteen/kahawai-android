@@ -13,6 +13,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.navigation.NavHostController
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -101,7 +102,17 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
     // see PlayerScreen's window DisposableEffect.
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     val insetsModifier = if (currentRoute == Routes.PLAYER) modifier else modifier.safeDrawingPadding()
-    NavHost(navController = navController, startDestination = start, modifier = insetsModifier) {
+    // No animated transitions anywhere in the graph — every route cuts
+    // instantly instead of the library's default 700ms cross-fade.
+    NavHost(
+        navController = navController,
+        startDestination = start,
+        modifier = insetsModifier,
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
+    ) {
         composable(Routes.SETUP) {
             ServerSetupScreen(
                 serverConfigStore = app.serverConfigStore,
@@ -208,11 +219,6 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
                 navArgument("audioTrack") { type = NavType.IntType; defaultValue = 0 },
                 navArgument("subtitleTrack") { type = NavType.LongType; defaultValue = -1L },
             ),
-            // Skip the library's default 700ms cross-fade on the way out:
-            // the player keeps rendering live video for that whole
-            // duration, so it visibly lingers on top of the screen
-            // beneath it. An instant cut removes the overlap entirely.
-            popExitTransition = { ExitTransition.None },
         ) { backStackEntry ->
             val itemId = backStackEntry.arguments?.getString("itemId") ?: return@composable
             val startMs = backStackEntry.arguments?.getLong("startMs") ?: 0L

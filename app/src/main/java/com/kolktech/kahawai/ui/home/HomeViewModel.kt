@@ -46,11 +46,15 @@ class HomeViewModel(private val repo: CatalogRepository) : ViewModel() {
     /// keeps the current rows up instead of dropping to the Loading
     /// spinner, so watch-progress bars update without a flash or focus
     /// loss. The Loaded guard also skips the ON_RESUME that fires during
-    /// init{}'s own load. isRefreshing drives the pull-to-refresh
-    /// indicator; best-effort fetch keeps what's shown on failure.
-    fun refresh() {
+    /// init{}'s own load. isRefreshing drives the pull-to-refresh spinner
+    /// and is only set for an actual pull gesture — resume/reload-button
+    /// triggers refresh silently since the user didn't ask for a
+    /// loading indicator there.
+    fun refresh(showIndicator: Boolean = false) {
         val current = _state.value as? HomeState.Loaded ?: return
-        _state.value = current.copy(isRefreshing = true)
+        if (showIndicator) {
+            _state.value = current.copy(isRefreshing = true)
+        }
         viewModelScope.launch {
             _state.value = try {
                 HomeState.Loaded(fetchRows())

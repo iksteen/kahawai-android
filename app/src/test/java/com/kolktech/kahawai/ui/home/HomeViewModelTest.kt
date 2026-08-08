@@ -104,7 +104,7 @@ class HomeViewModelTest {
                     """{"items":[{"id":"i1","kind":"movie","title":"Arrival 2"}],"total":1,"limit":20,"offset":0}""",
                 ),
             )
-            viewModel.refresh()
+            viewModel.refresh(showIndicator = true)
 
             val refreshing = awaitItem() as HomeState.Loaded
             assertTrue(refreshing.isRefreshing)
@@ -130,7 +130,7 @@ class HomeViewModelTest {
             val loaded = item as HomeState.Loaded
 
             server.enqueue(MockResponse().setResponseCode(500))
-            viewModel.refresh()
+            viewModel.refresh(showIndicator = true)
 
             val refreshing = awaitItem() as HomeState.Loaded
             assertTrue(refreshing.isRefreshing)

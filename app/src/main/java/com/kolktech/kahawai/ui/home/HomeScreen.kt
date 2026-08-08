@@ -172,13 +172,12 @@ fun HomeScreen(
                 is HomeState.Loaded -> {
                     // Wraps both branches below (not just the grid) so the
                     // empty-library state can also be pulled to refresh.
-                    // On TV isRefreshing is instead driven by the reload
-                    // button above — the box still shows the same small
-                    // top indicator, it just never sees a drag gesture
-                    // since the manifest marks touchscreen optional there.
+                    // isRefreshing only turns on for this drag-triggered
+                    // path — resume/TV-reload calls refresh() without the
+                    // indicator, since those aren't a pull gesture.
                     PullToRefreshBox(
                         isRefreshing = s.isRefreshing,
-                        onRefresh = viewModel::refresh,
+                        onRefresh = { viewModel.refresh(showIndicator = true) },
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         if (s.rows.isEmpty()) {
