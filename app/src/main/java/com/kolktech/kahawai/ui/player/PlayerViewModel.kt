@@ -338,6 +338,12 @@ class PlayerViewModel(
     private var subtitleEpoch: Int = 0
     private var playbackEndedHandled = false
 
+    /// Guards [attemptSessionRecovery] to one retry per failure — reset
+    /// on a successful recovery so a LATER reap (e.g. the device going
+    /// back to sleep for hours again) still gets its own one-shot retry,
+    /// rather than every error after the first going straight to terminal.
+    private var recoveryAttempted = false
+
     /// The offsetMs value baked into the current MediaItem's sideloaded
     /// VTT configs as `shift_ms` (see textDeliverySubtitleConfigs). When
     /// syncOrigin later corrects offsetMs, the baked shift is stale by
@@ -385,8 +391,7 @@ class PlayerViewModel(
                 // thing to check when this is a hub-side pipeline stall,
                 // not a client bug.
                 Log.e(TAG, "Playback failed for item=$itemId sessionId=${session?.sessionId}", error)
-                progressJob?.cancel()
-                _state.value = PlayerState.Error(getApplication<Application>().getString(R.string.player_playback_failed, error.readableMessage()))
+                attemptSessionRecovery(error)
             }
 
             /// Diagnostic only: pins down whether a "seek far ahead ->
@@ -512,6 +517,54 @@ class PlayerViewModel(
                 startProgressLoop()
             } catch (e: Exception) {
                 _state.value = PlayerState.Error(e.readableMessage())
+            }
+        }
+    }
+
+    /// A player error is very often not a real failure but the hub's own
+    /// session reaper having torn the pipeline (or, for "direct", the
+    /// session record itself) down out from under a client that stopped
+    /// reporting progress — e.g. the device went to sleep mid-episode and
+    /// came back hours later (hub sessions are reaped quickly once
+    /// progress reports stop, see kahawai-debug-setup memory notes).
+    /// Whatever ExoPlayer had already buffered plays out fine; the error
+    /// only surfaces once it needs a segment/byte-range the hub can no
+    /// longer serve. Rather than tearing the whole screen down for
+    /// something a fresh startSession() at the same position fixes
+    /// outright, this makes exactly ONE retry before giving up — same
+    /// recipe as restartSessionWithSubtitle, minus the picker-revert
+    /// bookkeeping that only applies to a user-driven subtitle switch.
+    private fun attemptSessionRecovery(error: PlaybackException) {
+        val failedSession = session
+        if (recoveryAttempted || failedSession == null) {
+            progressJob?.cancel()
+            _state.value = PlayerState.Error(getApplication<Application>().getString(R.string.player_playback_failed, error.readableMessage()))
+            return
+        }
+        recoveryAttempted = true
+        val positionMs = offsetMs + realPlayer.currentPosition
+        Log.w(TAG, "attempting session recovery item=$itemId oldSessionId=${failedSession.sessionId} positionMs=$positionMs")
+        viewModelScope.launch {
+            try {
+                val profile = CapabilityProfileBuilder.build(getApplication())
+                val newSession = repo.startSession(
+                    itemId,
+                    profile,
+                    positionMs,
+                    audioTrack = initialAudioTrack,
+                    subtitleTrack = burnPickOrNull(_selectedSubtitleTrack.value),
+                )
+                session = newSession
+                val plan = resumePlan(newSession.mode, positionMs)
+                offsetMs = plan.offsetMs
+                attach(newSession, startPositionMs = plan.startPositionMs, requestedAbsMs = positionMs)
+                _state.value = PlayerState.Ready
+                recoveryAttempted = false
+                Log.w(TAG, "session recovery succeeded item=$itemId newSessionId=${newSession.sessionId}")
+            } catch (e: Exception) {
+                Log.e(TAG, "session recovery failed item=$itemId", e)
+                progressJob?.cancel()
+                _state.value = PlayerState.Error(getApplication<Application>().getString(R.string.player_playback_failed, e.readableMessage()))
             }
         }
     }
