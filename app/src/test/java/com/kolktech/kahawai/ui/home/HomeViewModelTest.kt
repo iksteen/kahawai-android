@@ -5,8 +5,10 @@ import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.testutil.MainDispatcherRule
 import com.kolktech.kahawai.testutil.buildTestApiService
 import kotlinx.coroutines.test.runTest
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -35,14 +37,37 @@ class HomeViewModelTest {
 
     private fun repo() = CatalogRepository({ buildTestApiService(server) })
 
+    /// [HomeViewModel.fetchHome] fires the continue-watching and libraries
+    /// requests concurrently (real sockets, real threads — this is an
+    /// integration-style test), so which one a plain FIFO
+    /// [okhttp3.mockwebserver.QueueDispatcher] hands the next enqueued
+    /// response to is a genuine race, not a fixed order. Routing by path
+    /// instead makes each response deterministic regardless of arrival
+    /// order.
+    private fun routeBy(vararg routes: Pair<(RecordedRequest) -> Boolean, MockResponse>) =
+        object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                routes.firstOrNull { (matches, _) -> matches(request) }?.second
+                    ?: MockResponse().setResponseCode(404)
+        }
+
+    private val noneInProgress = MockResponse().setBody("""{"items":[],"total":0,"limit":12,"offset":0}""")
+    private val oneLibrary =
+        MockResponse().setBody("""{"libraries":[{"id":"lib1","name":"Movies","media_type":"video"}]}""")
+
+    private fun libraryItems(title: String) = MockResponse().setBody(
+        """{"items":[{"id":"i1","kind":"movie","title":"$title"}],"total":1,"limit":20,"offset":0}""",
+    )
+
+    private fun homeDispatcher(libraryResponse: MockResponse) = routeBy(
+        { r: RecordedRequest -> r.path?.contains("in_progress=true") == true } to noneInProgress,
+        { r: RecordedRequest -> r.path == "/api/v1/libraries" } to oneLibrary,
+        { r: RecordedRequest -> r.path?.contains("library=lib1") == true } to libraryResponse,
+    )
+
     @Test
     fun `load succeeds and produces one row per non-empty library`() = runTest {
-        server.enqueue(MockResponse().setBody("""{"libraries":[{"id":"lib1","name":"Movies","media_type":"video"}]}"""))
-        server.enqueue(
-            MockResponse().setBody(
-                """{"items":[{"id":"i1","kind":"movie","title":"Arrival"}],"total":1,"limit":20,"offset":0}""",
-            ),
-        )
+        server.dispatcher = homeDispatcher(libraryItems("Arrival"))
 
         val viewModel = HomeViewModel(repo())
 
@@ -57,7 +82,7 @@ class HomeViewModelTest {
 
     @Test
     fun `load failure with 401 marks state as auth error`() = runTest {
-        server.enqueue(MockResponse().setResponseCode(401).setBody("unauthorized"))
+        server.dispatcher = routeBy({ _: RecordedRequest -> true } to MockResponse().setResponseCode(401).setBody("unauthorized"))
 
         val viewModel = HomeViewModel(repo())
 
@@ -71,7 +96,7 @@ class HomeViewModelTest {
 
     @Test
     fun `load failure with a generic error is not an auth error`() = runTest {
-        server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
+        server.dispatcher = routeBy({ _: RecordedRequest -> true } to MockResponse().setResponseCode(500).setBody("boom"))
 
         val viewModel = HomeViewModel(repo())
 
@@ -85,12 +110,7 @@ class HomeViewModelTest {
 
     @Test
     fun `refresh re-fetches rows while already loaded`() = runTest {
-        server.enqueue(MockResponse().setBody("""{"libraries":[{"id":"lib1","name":"Movies","media_type":"video"}]}"""))
-        server.enqueue(
-            MockResponse().setBody(
-                """{"items":[{"id":"i1","kind":"movie","title":"Arrival"}],"total":1,"limit":20,"offset":0}""",
-            ),
-        )
+        server.dispatcher = homeDispatcher(libraryItems("Arrival"))
         val viewModel = HomeViewModel(repo())
 
         viewModel.state.test {
@@ -98,12 +118,7 @@ class HomeViewModelTest {
             if (item is HomeState.Loading) item = awaitItem()
             assertTrue(item is HomeState.Loaded)
 
-            server.enqueue(MockResponse().setBody("""{"libraries":[{"id":"lib1","name":"Movies","media_type":"video"}]}"""))
-            server.enqueue(
-                MockResponse().setBody(
-                    """{"items":[{"id":"i1","kind":"movie","title":"Arrival 2"}],"total":1,"limit":20,"offset":0}""",
-                ),
-            )
+            server.dispatcher = homeDispatcher(libraryItems("Arrival 2"))
             viewModel.refresh(showIndicator = true)
 
             val refreshing = awaitItem() as HomeState.Loaded
@@ -116,12 +131,7 @@ class HomeViewModelTest {
 
     @Test
     fun `refresh failure leaves previously loaded rows untouched`() = runTest {
-        server.enqueue(MockResponse().setBody("""{"libraries":[{"id":"lib1","name":"Movies","media_type":"video"}]}"""))
-        server.enqueue(
-            MockResponse().setBody(
-                """{"items":[{"id":"i1","kind":"movie","title":"Arrival"}],"total":1,"limit":20,"offset":0}""",
-            ),
-        )
+        server.dispatcher = homeDispatcher(libraryItems("Arrival"))
         val viewModel = HomeViewModel(repo())
 
         viewModel.state.test {
@@ -129,7 +139,7 @@ class HomeViewModelTest {
             if (item is HomeState.Loading) item = awaitItem()
             val loaded = item as HomeState.Loaded
 
-            server.enqueue(MockResponse().setResponseCode(500))
+            server.dispatcher = routeBy({ _: RecordedRequest -> true } to MockResponse().setResponseCode(500))
             viewModel.refresh(showIndicator = true)
 
             val refreshing = awaitItem() as HomeState.Loaded

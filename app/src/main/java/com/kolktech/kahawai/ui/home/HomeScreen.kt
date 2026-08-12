@@ -163,7 +163,7 @@ fun HomeScreen(
                         onRefresh = { viewModel.refresh(showIndicator = true) },
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        if (s.rows.isEmpty()) {
+                        if (s.rows.isEmpty() && s.continueWatching.isEmpty()) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text(stringResource(R.string.home_no_libraries))
                             }
@@ -195,6 +195,27 @@ fun HomeScreen(
                                 // library at once — that all-at-once burst was
                                 // the cause of the scroll stutter.
                                 LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                    if (s.continueWatching.isNotEmpty()) {
+                                        item(key = "continue-watching-header") {
+                                            ContinueWatchingHeader()
+                                        }
+                                        itemsIndexed(
+                                            s.continueWatching.chunked(columns),
+                                            key = { _, chunk -> "continue-watching-${chunk.first().id}" },
+                                        ) { chunkIndex, chunk ->
+                                            PosterGridRow(
+                                                chunk,
+                                                columns,
+                                                repo,
+                                                onOpenItem,
+                                                firstItemFocusRequester = if (chunkIndex == 0) {
+                                                    firstItemFocusRequester
+                                                } else {
+                                                    null
+                                                },
+                                            )
+                                        }
+                                    }
                                     s.rows.forEachIndexed { rowIndex, row ->
                                         item(key = "${row.library.id}-header") {
                                             LibraryHeader(row, onOpenLibrary)
@@ -208,7 +229,10 @@ fun HomeScreen(
                                                 columns,
                                                 repo,
                                                 onOpenItem,
-                                                firstItemFocusRequester = if (rowIndex == 0 && chunkIndex == 0) {
+                                                firstItemFocusRequester = if (s.continueWatching.isEmpty() &&
+                                                    rowIndex == 0 &&
+                                                    chunkIndex == 0
+                                                ) {
                                                     firstItemFocusRequester
                                                 } else {
                                                     null
@@ -224,6 +248,20 @@ fun HomeScreen(
             }
         }
     }
+}
+
+/// No "see all" and no [onOpenLibrary] target: continue-watching is a
+/// cross-library row with no library of its own to open — see
+/// [HomeState.Loaded.continueWatching].
+@Composable
+private fun ContinueWatchingHeader() {
+    Text(
+        stringResource(R.string.home_continue_watching),
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier.fillMaxWidth().padding(top = 20.dp, start = 16.dp, end = 16.dp, bottom = 8.dp),
+    )
 }
 
 @Composable

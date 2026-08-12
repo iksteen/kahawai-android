@@ -27,9 +27,10 @@ class CatalogRepository(apiProvider: () -> ApiService = { ApiClient.apiService()
         library: String? = null,
         q: String? = null,
         sort: String? = null,
+        inProgress: Boolean? = null,
         limit: Int? = null,
         offset: Int? = null,
-    ): ItemsResponse = api.items(library, q, sort, limit, offset)
+    ): ItemsResponse = api.items(library, q, sort, inProgress, limit, offset)
 
     suspend fun item(id: String): ItemDetail = api.item(id)
 

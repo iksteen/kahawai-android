@@ -54,6 +54,11 @@ interface ApiService {
         @Query("library") library: String? = null,
         @Query("q") q: String? = null,
         @Query("sort") sort: String? = null,
+        /// Started and not finished, most recently watched first — the
+        /// home screen's continue-watching row (api.rs:2213-2216). Its
+        /// own order, so `sort`/`q` do not apply; `library` still scopes
+        /// it.
+        @Query("in_progress") inProgress: Boolean? = null,
         @Query("limit") limit: Int? = null,
         @Query("offset") offset: Int? = null,
     ): ItemsResponse

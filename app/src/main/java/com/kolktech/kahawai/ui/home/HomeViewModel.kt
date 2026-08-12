@@ -19,7 +19,14 @@ data class LibraryRow(val library: LibrarySummary, val items: List<Item>, val to
 sealed interface HomeState {
     data object Loading : HomeState
     data class Error(val message: String, val isAuthError: Boolean = false) : HomeState
-    data class Loaded(val rows: List<LibraryRow>, val isRefreshing: Boolean = false) : HomeState
+    data class Loaded(
+        val rows: List<LibraryRow>,
+        /// Started and not finished, most recently watched first — mirrors
+        /// web/src/views/Libraries.tsx's `continuing` row. Fetched
+        /// cross-library in one call, ahead of the per-library rows.
+        val continueWatching: List<Item> = emptyList(),
+        val isRefreshing: Boolean = false,
+    ) : HomeState
 }
 
 class HomeViewModel(private val repo: CatalogRepository) : ViewModel() {
@@ -34,7 +41,8 @@ class HomeViewModel(private val repo: CatalogRepository) : ViewModel() {
         _state.value = HomeState.Loading
         viewModelScope.launch {
             try {
-                _state.value = HomeState.Loaded(fetchRows())
+                val (continueWatching, rows) = fetchHome()
+                _state.value = HomeState.Loaded(rows, continueWatching)
             } catch (e: Exception) {
                 _state.value = HomeState.Error(e.readableMessage(), e.isAuthError())
             }
@@ -57,32 +65,40 @@ class HomeViewModel(private val repo: CatalogRepository) : ViewModel() {
         }
         viewModelScope.launch {
             _state.value = try {
-                HomeState.Loaded(fetchRows())
+                val (continueWatching, rows) = fetchHome()
+                HomeState.Loaded(rows, continueWatching)
             } catch (e: Exception) {
                 current.copy(isRefreshing = false)
             }
         }
     }
 
-    private suspend fun fetchRows(): List<LibraryRow> {
+    private suspend fun fetchHome(): Pair<List<Item>, List<LibraryRow>> = coroutineScope {
+        // Cross-library and in one request, same as
+        // web/src/views/Libraries.tsx:318 — recency only means anything
+        // across the whole set, and a per-library fetch could not be
+        // merged since the hub doesn't return the timestamp it sorted by.
+        val continueWatchingDeferred = async {
+            repo.items(inProgress = true, limit = CONTINUE_WATCHING_SIZE).items
+        }
         val libraries = repo.libraries()
         // One request per library, concurrently — the items
         // endpoint has no "top N per library" shape, mirroring
         // web/src/views/Libraries.tsx:31-34.
-        val rows = coroutineScope {
-            libraries
-                .map { library ->
-                    async {
-                        val response = repo.items(library = library.id, sort = "-added", limit = ROW_SIZE)
-                        LibraryRow(library, response.items, response.total)
-                    }
+        val rows = libraries
+            .map { library ->
+                async {
+                    val response = repo.items(library = library.id, sort = "-added", limit = ROW_SIZE)
+                    LibraryRow(library, response.items, response.total)
                 }
-                .awaitAll()
-        }
-        return rows.filter { it.items.isNotEmpty() }
+            }
+            .awaitAll()
+            .filter { it.items.isNotEmpty() }
+        continueWatchingDeferred.await() to rows
     }
 
     private companion object {
         const val ROW_SIZE = 20
+        const val CONTINUE_WATCHING_SIZE = 12
     }
 }
