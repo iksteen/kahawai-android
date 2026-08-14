@@ -62,15 +62,8 @@
 
     <!-- Login -->
     <string name="login_sign_in">Sign in</string>
-    <string name="login_cancel_setup">Cancel server setup</string>
-    <string name="login_setup_prompt">Setting up a new server?</string>
-    <string name="login_setup_token">Setup token</string>
-    <string name="login_setup_token_placeholder">XXXX-XXXX</string>
-    <string name="login_create_admin">Create admin account</string>
     <string name="login_enter_username_password">Enter a username and password</string>
     <string name="login_failed">Login failed: %1$s</string>
-    <string name="login_enter_setup_fields">Enter the setup token, a username, and a password</string>
-    <string name="login_setup_failed">Setup failed: %1$s</string>
 
     <!-- Server setup (first connection) -->
     <string name="setup_title">Connect to your kahawai hub</string>
@@ -80,6 +73,7 @@
     <string name="setup_enter_address">Enter your hub\'s address</string>
     <string name="setup_invalid_address">That doesn\'t look like a valid http:// or https:// address</string>
     <string name="setup_unreachable">Couldn\'t reach %1$s: %2$s</string>
+    <string name="setup_admin_required">This hub doesn\'t have an admin account yet. Finish setup in a browser on the machine running the hub, then come back here to sign in.</string>
 
     <!-- Settings hub -->
     <string name="settings_title">Settings</string>

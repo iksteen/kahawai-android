@@ -7,6 +7,7 @@ import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
 import com.kolktech.kahawai.data.network.dto.ItemsResponse
 import com.kolktech.kahawai.data.network.dto.LibrariesResponse
 import com.kolktech.kahawai.data.network.dto.LoginRequest
+import com.kolktech.kahawai.data.network.dto.LogoutRequest
 import com.kolktech.kahawai.data.network.dto.PrefsResponse
 import com.kolktech.kahawai.data.network.dto.ProgressRequest
 import com.kolktech.kahawai.data.network.dto.PutPrefRequest
@@ -15,7 +16,6 @@ import com.kolktech.kahawai.data.network.dto.RefreshRequest
 import com.kolktech.kahawai.data.network.dto.FontsResponse
 import com.kolktech.kahawai.data.network.dto.SeekRequest
 import com.kolktech.kahawai.data.network.dto.SeekResponse
-import com.kolktech.kahawai.data.network.dto.SetupRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.TokenPair
@@ -38,13 +38,13 @@ interface ApiService {
     @POST("api/v1/auth/token")
     suspend fun login(@Body body: LoginRequest): TokenPair
 
-    /// First-time admin account creation (crates/kahawai-hub/src/api.rs:1206).
-    /// Unauthenticated like [login] — called via [ApiClient.plainApiService].
-    @POST("api/v1/setup")
-    suspend fun setup(@Body body: SetupRequest): TokenPair
-
     @POST("api/v1/auth/refresh")
     suspend fun refresh(@Body body: RefreshRequest): TokenPair
+
+    /// Revokes this login's refresh family server-side. Authenticated
+    /// (needs the access bearer) — called via [ApiClient.apiService].
+    @POST("api/v1/auth/logout")
+    suspend fun logout(@Body body: LogoutRequest)
 
     @GET("api/v1/libraries")
     suspend fun libraries(): LibrariesResponse

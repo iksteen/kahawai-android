@@ -57,17 +57,24 @@ class ServerSetupViewModel(
                 // Probed against the candidate URL directly — nothing is
                 // persisted until the hub actually answers, so a typo'd
                 // address never becomes the stored base URL.
-                // Setup completion is no longer checked here — a hub that
-                // still needs its first admin account is handled by the
-                // Login screen's own setup-token entry, not a separate
-                // gate on this address-probing step.
                 // The candidate is first resolved through any http→https
                 // redirect the host serves (see [ApiClient.resolveBaseUrl]):
                 // storing the pre-redirect URL would leave every
                 // authenticated request bouncing through a redirect that
                 // strips its Authorization header.
                 val resolved = ApiClient.resolveBaseUrl(url)
-                ApiClient.probeApiService(resolved).bootstrap()
+                // First-admin creation lives on the hub's loopback-only
+                // setup listener now (crates/kahawai-hub/src/api.rs) — it
+                // isn't reachable through this public API at all, so
+                // there's no in-app flow to fall back to. Stop here with a
+                // clear message instead of sending the user on to a Login
+                // screen that can only ever 503.
+                if (ApiClient.probeApiService(resolved).bootstrap().setupRequired) {
+                    _state.value = ServerSetupState.Error(
+                        getApplication<Application>().getString(R.string.setup_admin_required),
+                    )
+                    return@launch
+                }
                 val previous = serverConfigStore.baseUrl
                 serverConfigStore.baseUrl = resolved
                 ApiClient.reset()

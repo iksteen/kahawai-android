@@ -185,6 +185,25 @@ class ServerSetupViewModelTest {
     }
 
     @Test
+    fun `submit stops at the admin-required error when the hub still needs its first admin account`() = runTest {
+        every { serverConfigStore.baseUrl } returns null
+        val viewModel = vm()
+        coEvery { ApiClient.resolveBaseUrl(any()) } returns "http://hub.local/"
+        server.enqueue(MockResponse().setBody("""{"setup_required":true,"authenticated":false}"""))
+
+        viewModel.state.test {
+            assertEquals(ServerSetupState.Idle, awaitItem())
+            viewModel.submit("hub.local")
+            var item = awaitItem()
+            if (item is ServerSetupState.Loading) item = awaitItem()
+            val error = item as ServerSetupState.Error
+            assertEquals("res:${R.string.setup_admin_required}", error.message)
+        }
+        verify(exactly = 0) { serverConfigStore.baseUrl = any() }
+        verify(exactly = 0) { ApiClient.reset() }
+    }
+
+    @Test
     fun `submit failure surfaces the unreachable sentinel with the url and readable message`() = runTest {
         every { serverConfigStore.baseUrl } returns null
         val viewModel = vm()

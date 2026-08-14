@@ -10,7 +10,6 @@ import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.auth.TokenStore
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.LoginRequest
-import com.kolktech.kahawai.data.network.dto.SetupRequest
 import com.kolktech.kahawai.data.network.readableMessage
 
 sealed interface LoginState {
@@ -37,26 +36,6 @@ class LoginViewModel(application: Application, private val tokenStore: TokenStor
                 _state.value = LoginState.LoggedIn
             } catch (e: Exception) {
                 _state.value = LoginState.Error(getApplication<Application>().getString(R.string.login_failed, e.readableMessage()))
-            }
-        }
-    }
-
-    /// First-time hub setup: creates the admin account from the hub's
-    /// console-printed setup token instead of signing in to an existing
-    /// one (see [com.kolktech.kahawai.data.network.ApiService.setup]).
-    fun setup(token: String, username: String, password: String) {
-        if (token.isBlank() || username.isBlank() || password.isEmpty()) {
-            _state.value = LoginState.Error(getApplication<Application>().getString(R.string.login_enter_setup_fields))
-            return
-        }
-        _state.value = LoginState.Loading
-        viewModelScope.launch {
-            try {
-                val tokens = ApiClient.plainApiService().setup(SetupRequest(token, username, password))
-                tokenStore.save(tokens)
-                _state.value = LoginState.LoggedIn
-            } catch (e: Exception) {
-                _state.value = LoginState.Error(getApplication<Application>().getString(R.string.login_setup_failed, e.readableMessage()))
             }
         }
     }

@@ -12,7 +12,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -49,10 +48,6 @@ fun LoginScreen(
     val state by viewModel.state.collectAsState()
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    // Collapsed by default regardless of hub state — first-time setup is
-    // an escape hatch off the normal login form, not a separate screen.
-    var showSetupKey by remember { mutableStateOf(false) }
-    var setupToken by remember { mutableStateOf("") }
 
     LaunchedEffect(state) {
         if (state is LoginState.LoggedIn) onLoggedIn()
@@ -91,23 +86,6 @@ fun LoginScreen(
                 .padding(top = 8.dp)
                 .semantics { contentType = ContentType.Password },
         )
-        TextButton(
-            onClick = { showSetupKey = !showSetupKey },
-            modifier = Modifier.padding(top = 4.dp),
-        ) {
-            Text(stringResource(if (showSetupKey) R.string.login_cancel_setup else R.string.login_setup_prompt))
-        }
-        if (showSetupKey) {
-            OutlinedTextField(
-                value = setupToken,
-                onValueChange = { setupToken = it },
-                label = { Text(stringResource(R.string.login_setup_token)) },
-                placeholder = { Text(stringResource(R.string.login_setup_token_placeholder)) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
         if (state is LoginState.Error) {
             Text(
                 (state as LoginState.Error).message,
@@ -116,13 +94,7 @@ fun LoginScreen(
             )
         }
         Button(
-            onClick = {
-                if (showSetupKey) {
-                    viewModel.setup(setupToken, username, password)
-                } else {
-                    viewModel.login(username, password)
-                }
-            },
+            onClick = { viewModel.login(username, password) },
             enabled = state !is LoginState.Loading,
             modifier = Modifier
                 .fillMaxWidth()
@@ -131,7 +103,7 @@ fun LoginScreen(
             if (state is LoginState.Loading) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp))
             } else {
-                Text(stringResource(if (showSetupKey) R.string.login_create_admin else R.string.login_sign_in))
+                Text(stringResource(R.string.login_sign_in))
             }
         }
     }
