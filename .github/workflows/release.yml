@@ -23,7 +23,7 @@ jobs:
           java-version: '17'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           # Release builds are infrequent and must be reproducible; a stale
           # or partially-written cross-run dependency cache (this job is
