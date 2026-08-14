@@ -34,6 +34,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.kolktech.kahawai.KahawaiApp
 import kotlinx.coroutines.launch
+import com.kolktech.kahawai.data.repository.AuthRepository
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.admin.AdminScreen
 import com.kolktech.kahawai.ui.detail.DetailScreen
@@ -106,6 +107,7 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
 
     val navController: NavHostController = rememberNavController()
     val catalogRepository = remember { CatalogRepository() }
+    val authRepository = remember { AuthRepository() }
     val coroutineScope = rememberCoroutineScope()
     val start = when {
         app.serverConfigStore.baseUrl == null -> Routes.SETUP
@@ -120,6 +122,19 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
     // (never hits that refresh path at all) is covered as well.
     val onSessionExpired: () -> Unit = {
         coroutineScope.launch { app.tokenStore.clear() }
+        navController.navigate(Routes.LOGIN) { popUpTo(0) { inclusive = true } }
+    }
+    // User-initiated logout (menu item): revoke the refresh family
+    // server-side before dropping local tokens, so the hub's login row
+    // doesn't outlive this session. Best-effort — an unreachable hub or
+    // an already-invalid token shouldn't block clearing local state.
+    val onLogout: () -> Unit = {
+        coroutineScope.launch {
+            app.tokenStore.refreshToken?.let { refreshToken ->
+                runCatching { authRepository.logout(refreshToken) }
+            }
+            app.tokenStore.clear()
+        }
         navController.navigate(Routes.LOGIN) { popUpTo(0) { inclusive = true } }
     }
 
@@ -214,9 +229,7 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
                 onOpenLibrary = { id, name -> navController.navigate(Routes.library(id, name)) },
                 onSearch = { navController.navigate(Routes.SEARCH) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                // Same effect as an expired session: clear tokens, pop back
-                // to a fresh Login.
-                onLogout = onSessionExpired,
+                onLogout = onLogout,
                 onSessionExpired = onSessionExpired,
             )
         }
