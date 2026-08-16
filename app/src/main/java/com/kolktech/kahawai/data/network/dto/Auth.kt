@@ -7,7 +7,13 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class BootstrapResponse(
     val setupRequired: Boolean,
-    val authenticated: Boolean,
+    // Only kahawai-tuxx's fork sends this (its bootstrap route reports the
+    // caller's own token validity); upstream iksteen/kahawai deliberately
+    // omits it (`api.rs`: "bootstrap no longer inspects credentials" — a
+    // public, pre-login endpoint echoing credential validity is itself a
+    // probing oracle). Nothing in this app reads the value, so default it
+    // rather than requiring a field only one server variant sends.
+    val authenticated: Boolean = false,
 )
 
 /// `client` picks the hub's auth transport (`crates/kahawai-hub/src/api.rs`
