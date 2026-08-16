@@ -340,14 +340,15 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
     // Picture-in-picture on touch devices: playback follows the user to
     // the home screen instead of pausing. Android 12+ auto-enters via
     // setAutoEnterEnabled (which also gets the smooth shrink animation);
-    // older versions enter explicitly from onUserLeaveHint. TV devices
-    // don't report FEATURE_PICTURE_IN_PICTURE, so all of this is inert
-    // there. Only entered while actually playing — a paused player on
-    // Home is just backgrounded (and the ON_STOP observer above pauses
-    // it anyway).
+    // older versions enter explicitly from onUserLeaveHint. Explicitly
+    // excluded on TV (isTv above): some TV devices report
+    // FEATURE_PICTURE_IN_PICTURE despite Home meaning "leave the app",
+    // so Home there must go straight to the launcher, not PiP. Only
+    // entered while actually playing — a paused player on Home is just
+    // backgrounded (and the ON_STOP observer above pauses it anyway).
     val mainActivity = activity as? MainActivity
-    val supportsPip = remember(context) {
-        context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+    val supportsPip = remember(context, isTv) {
+        !isTv && context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
     }
     var isInPip by remember { mutableStateOf(mainActivity?.isInPictureInPictureMode == true) }
 
