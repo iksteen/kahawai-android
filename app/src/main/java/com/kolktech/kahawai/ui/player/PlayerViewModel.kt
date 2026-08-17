@@ -344,6 +344,17 @@ class PlayerViewModel(
     /// rather than every error after the first going straight to terminal.
     private var recoveryAttempted = false
 
+    /// True once this playback has reached STATE_READY at least once.
+    /// [attemptSessionRecovery] only spends a retry (and the hub session
+    /// slot that costs) on errors that happen AFTER that — the "hub
+    /// reaped a stale session" scenario the retry exists for. A file
+    /// that errors before ever reaching READY is broken outright (bad
+    /// codec, corrupt source, etc.): retrying it just burns a second
+    /// session on the same unplayable file instead of surfacing the
+    /// error immediately. Never reset once true — it's a property of
+    /// "this media decodes on this device", not of the current session.
+    private var everReachedReady = false
+
     /// The offsetMs value baked into the current MediaItem's sideloaded
     /// VTT configs as `shift_ms` (see textDeliverySubtitleConfigs). When
     /// syncOrigin later corrects offsetMs, the baked shift is stale by
@@ -407,6 +418,7 @@ class PlayerViewModel(
                         "currentPos=${realPlayer.currentPosition} bufferedPos=${realPlayer.bufferedPosition} " +
                         "playWhenReady=${realPlayer.playWhenReady}",
                 )
+                if (playbackState == Player.STATE_READY) everReachedReady = true
                 if (playbackState == Player.STATE_ENDED) handlePlaybackEnded()
             }
 
@@ -521,24 +533,35 @@ class PlayerViewModel(
         }
     }
 
-    /// A player error is very often not a real failure but the hub's own
-    /// session reaper having torn the pipeline (or, for "direct", the
-    /// session record itself) down out from under a client that stopped
-    /// reporting progress — e.g. the device went to sleep mid-episode and
-    /// came back hours later (hub sessions are reaped quickly once
-    /// progress reports stop, see kahawai-debug-setup memory notes).
-    /// Whatever ExoPlayer had already buffered plays out fine; the error
-    /// only surfaces once it needs a segment/byte-range the hub can no
-    /// longer serve. Rather than tearing the whole screen down for
-    /// something a fresh startSession() at the same position fixes
-    /// outright, this makes exactly ONE retry before giving up — same
-    /// recipe as restartSessionWithSubtitle, minus the picker-revert
-    /// bookkeeping that only applies to a user-driven subtitle switch.
+    /// A player error AFTER playback was already under way is very often
+    /// not a real failure but the hub's own session reaper having torn
+    /// the pipeline (or, for "direct", the session record itself) down
+    /// out from under a client that stopped reporting progress — e.g. the
+    /// device went to sleep mid-episode and came back hours later (hub
+    /// sessions are reaped quickly once progress reports stop, see
+    /// kahawai-debug-setup memory notes). Whatever ExoPlayer had already
+    /// buffered plays out fine; the error only surfaces once it needs a
+    /// segment/byte-range the hub can no longer serve. Rather than
+    /// tearing the whole screen down for something a fresh startSession()
+    /// at the same position fixes outright, this makes exactly ONE retry
+    /// before giving up — same recipe as restartSessionWithSubtitle,
+    /// minus the picker-revert bookkeeping that only applies to a
+    /// user-driven subtitle switch.
+    ///
+    /// [everReachedReady] gates that retry: an error that arrives before
+    /// playback ever got going is a broken/unplayable file, not a reaped
+    /// session — retrying would just start a SECOND session against the
+    /// same file, which fails the exact same way while also eating one
+    /// of the hub's limited concurrent-session slots. Every path out of
+    /// here (immediate terminal, or replaced by a recovered session)
+    /// explicitly ends [failedSession] rather than leaving it for the
+    /// hub's reaper — that's what was filling up the session limit.
     private fun attemptSessionRecovery(error: PlaybackException) {
         val failedSession = session
-        if (recoveryAttempted || failedSession == null) {
+        if (recoveryAttempted || failedSession == null || !everReachedReady) {
             progressJob?.cancel()
             _state.value = PlayerState.Error(getApplication<Application>().getString(R.string.player_playback_failed, error.readableMessage()))
+            endSessionBestEffort(failedSession?.sessionId)
             return
         }
         recoveryAttempted = true
@@ -561,10 +584,29 @@ class PlayerViewModel(
                 _state.value = PlayerState.Ready
                 recoveryAttempted = false
                 Log.w(TAG, "session recovery succeeded item=$itemId newSessionId=${newSession.sessionId}")
+                endSessionBestEffort(failedSession.sessionId)
             } catch (e: Exception) {
                 Log.e(TAG, "session recovery failed item=$itemId", e)
                 progressJob?.cancel()
                 _state.value = PlayerState.Error(getApplication<Application>().getString(R.string.player_playback_failed, e.readableMessage()))
+                endSessionBestEffort(failedSession.sessionId)
+            }
+        }
+    }
+
+    /// Releases a session the moment we're done with it — recovery giving
+    /// up, or a recovered session replacing it — instead of leaving it
+    /// occupying one of the hub's limited concurrent-session slots until
+    /// its own reaper eventually notices no more progress reports are
+    /// coming. Fire-and-forget/best-effort, same as onCleared(): the
+    /// reaper is still the backstop if this call itself fails.
+    private fun endSessionBestEffort(sessionId: String?) {
+        sessionId ?: return
+        viewModelScope.launch {
+            try {
+                repo.endSession(sessionId)
+            } catch (e: Exception) {
+                // Best-effort; the hub's own session reaper is the backstop.
             }
         }
     }
