@@ -39,6 +39,7 @@ fun PlayerSettingsScreen(
     var rememberBrightness by remember { mutableStateOf(appSettingsStore.rememberBrightnessLevel) }
     val seekBackMs = remember { mutableStateOf(appSettingsStore.seekBackMs) }
     val seekForwardMs = remember { mutableStateOf(appSettingsStore.seekForwardMs) }
+    var autoSkipIntrosOutros by remember { mutableStateOf(appSettingsStore.autoSkipIntrosOutros) }
 
     Scaffold(
         topBar = {
@@ -120,6 +121,17 @@ fun PlayerSettingsScreen(
                     seekForwardMs.value / 1000,
                 ),
                 onClick = onOpenSeeking,
+            )
+
+            SettingsSectionTitle(stringResource(R.string.player_settings_skipping))
+            SettingsSwitchRow(
+                title = stringResource(R.string.player_settings_auto_skip),
+                description = stringResource(R.string.player_settings_auto_skip_hint),
+                checked = autoSkipIntrosOutros,
+                onCheckedChange = {
+                    autoSkipIntrosOutros = it
+                    appSettingsStore.autoSkipIntrosOutros = it
+                },
             )
         }
     }

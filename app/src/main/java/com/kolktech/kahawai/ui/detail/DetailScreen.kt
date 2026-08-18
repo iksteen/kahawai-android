@@ -64,6 +64,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import coil3.compose.AsyncImage
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.AudioStreamInfo
+import com.kolktech.kahawai.data.network.dto.Chapter
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.network.dto.ItemDetail
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
@@ -412,6 +413,18 @@ private fun DetailInfo(
                 modifier = Modifier.padding(top = 16.dp),
             )
         }
+
+        // The file's own chapters (kahawai commit db7d743, "Chapters
+        // ride the item from the scan to the seek bar") — buttons, not a
+        // table of numbers, mirroring web/src/views/Detail.vue: the
+        // useful thing about a chapter is jumping straight into it.
+        if (detail.chapters.isNotEmpty()) {
+            ChaptersList(
+                chapters = detail.chapters,
+                onPlayChapter = { startMs -> onPlay(detail.id, startMs, selectedAudioTrackIndex, selectedSubtitleTrack?.id) },
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
     }
 
     detail.metadata?.overview?.let {
@@ -471,6 +484,57 @@ private fun SubtitlePicker(
                 }
             },
         )
+    }
+}
+
+/// A nameless chapter is still a seek point worth showing — plenty of
+/// rips number them and say nothing else. Mirrors
+/// web/src/domain/chapters.ts's chapterTitle.
+@Composable
+private fun chapterTitle(chapter: Chapter, index: Int): String =
+    chapter.title?.trim().takeUnless { it.isNullOrEmpty() }
+        ?: stringResource(R.string.detail_chapter_numbered, index + 1)
+
+private fun formatTimestamp(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds) else "%d:%02d".format(minutes, seconds)
+}
+
+@Composable
+private fun ChaptersList(chapters: List<Chapter>, onPlayChapter: (Long) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(stringResource(R.string.detail_chapters), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
+        chapters.forEachIndexed { index, chapter ->
+            var focused by remember { mutableStateOf(false) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focused = it.isFocused }
+                    .background(
+                        if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color.Transparent,
+                        RoundedCornerShape(4.dp),
+                    )
+                    .border(
+                        width = 2.dp,
+                        color = if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                        shape = RoundedCornerShape(4.dp),
+                    )
+                    .clickable { onPlayChapter(chapter.startMs) }
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    formatTimestamp(chapter.startMs),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(chapterTitle(chapter, index), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
     }
 }
 

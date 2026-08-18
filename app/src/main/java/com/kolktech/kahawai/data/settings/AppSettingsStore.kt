@@ -54,6 +54,16 @@ class AppSettingsStore(context: Context) {
         get() = prefs.getLong(KEY_SEEK_FORWARD_MS, 15_000L)
         set(value) = prefs.edit().putLong(KEY_SEEK_FORWARD_MS, value).apply()
 
+    /// HUB-37. Off by default: skipping is a strong assumption about
+    /// what the viewer wants during exactly the segment they might still
+    /// be watching (a title sequence with a plot-relevant cold open,
+    /// say), so it stays opt-in rather than applied the moment the hub
+    /// finds a boundary. The web client offers no equivalent — it only
+    /// ever shows the manual Skip button.
+    var autoSkipIntrosOutros: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_SKIP_INTROS_OUTROS, false)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_SKIP_INTROS_OUTROS, value).apply()
+
     private companion object {
         const val KEY_RESERVE_NOTCH_SPACE = "reserve_notch_space"
         const val KEY_APP_LANGUAGE = "app_language"
@@ -65,5 +75,6 @@ class AppSettingsStore(context: Context) {
         const val KEY_LAST_BRIGHTNESS_LEVEL = "last_brightness_level"
         const val KEY_SEEK_BACK_MS = "seek_back_ms"
         const val KEY_SEEK_FORWARD_MS = "seek_forward_ms"
+        const val KEY_AUTO_SKIP_INTROS_OUTROS = "auto_skip_intros_outros"
     }
 }

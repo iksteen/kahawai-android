@@ -130,3 +130,26 @@ data class SeekResponse(
 data class ProgressRequest(
     val positionMs: Long,
 )
+
+/// One chapter of a file, on the ITEM's timeline (kahawai commit
+/// db7d743, "Chapters ride the item from the scan to the seek bar").
+/// `endMs` is only what the container states — Matroska usually leaves
+/// it out and means "until the next one starts".
+@Serializable
+data class Chapter(
+    val startMs: Long,
+    val endMs: Long? = null,
+    val title: String? = null,
+)
+
+/// One recap/intro/credits boundary the hub's background sweep found
+/// for this episode (HUB-37, kahawai commit 4e9956a). `kind` is one of
+/// "recap"|"intro"|"credits"; `source` names which analyzer answered
+/// ("chapter"|"chromaprint"|"blackframe") and is display-only here.
+@Serializable
+data class Segment(
+    val kind: String,
+    val startMs: Long,
+    val endMs: Long,
+    val source: String,
+)

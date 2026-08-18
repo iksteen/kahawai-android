@@ -4,6 +4,7 @@ import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.ApiService
 import com.kolktech.kahawai.data.network.dto.CapabilityProfile
 import com.kolktech.kahawai.data.network.dto.FontsResponse
+import com.kolktech.kahawai.data.network.dto.ItemDetail
 import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
 import com.kolktech.kahawai.data.network.dto.ProgressRequest
 import com.kolktech.kahawai.data.network.dto.SeekRequest
@@ -43,6 +44,12 @@ class PlaybackRepository(private val api: ApiService = ApiClient.apiService()) {
     suspend fun subtitles(itemId: String, profile: CapabilityProfile): List<SubtitleTrack> =
         api.itemQuery(itemId, ItemQueryRequest(profile = profile)).negotiated?.subtitles
             ?: emptyList()
+
+    /// The full QUERY answer — subtitles, HUB-37 segments and chapters
+    /// together in the one round trip the hub designed them to share
+    /// (see [subtitles], which only keeps the first of the three).
+    suspend fun itemQuery(itemId: String, profile: CapabilityProfile): ItemDetail =
+        api.itemQuery(itemId, ItemQueryRequest(profile = profile))
 
     suspend fun fonts(itemId: String): FontsResponse = api.fonts(itemId)
 

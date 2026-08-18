@@ -72,6 +72,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.DefaultTrackNameProvider
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
@@ -309,6 +310,11 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
     val subtitleSession by viewModel.subtitleSession.collectAsState()
     val transientError by viewModel.transientError.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    val segments by viewModel.segments.collectAsState()
+    val chapters by viewModel.chapters.collectAsState()
+    // Read once, same as the gesture toggles above: not a value that
+    // should change out from under an already-open player.
+    val autoSkipEnabled = remember { appSettingsStore.autoSkipIntrosOutros }
 
     // TV remote back handling: a first press reveals the controls, a
     // press while they're up dismisses them (playback continues), and
@@ -441,6 +447,64 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
     // than threading the one PlayerScreen built for the ViewModel) keeps
     // this composable self-contained.
     val subtitleRepo = remember { PlaybackRepository() }
+
+    // HUB-37. The ViewModel exposes segments as a StateFlow (set once,
+    // at session start), but "which segment is the playhead inside" is a
+    // function of TIME, which nothing here otherwise polls — position is
+    // read straight off the player imperatively everywhere else in this
+    // file (gesture indicators, PiP aspect ratio). A short interval only
+    // runs while there's something to skip, matching the web client's
+    // Vue `computed` off `playing.posMs`, which only re-evaluates because
+    // the video element already fires timeupdate constantly.
+    var skipCheckPosMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(segments) {
+        if (segments.isEmpty()) return@LaunchedEffect
+        while (true) {
+            skipCheckPosMs = viewModel.player.currentPosition
+            delay(300)
+        }
+    }
+    val skippingSegment = remember(segments, skipCheckPosMs) { skippableSegment(segments, skipCheckPosMs) }
+
+    // Auto-skip fires once per segment (tracked by its start), not on
+    // every 300ms tick that still finds the playhead inside it — the
+    // hub seek that follows is an async round trip through the same
+    // handleSeek() path a manual Skip press uses, and re-issuing it every
+    // tick would just queue redundant hub round trips.
+    var autoSkippedStartMs by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(skippingSegment, autoSkipEnabled) {
+        val segment = skippingSegment
+        if (autoSkipEnabled && segment != null && segment.startMs != autoSkippedStartMs) {
+            autoSkippedStartMs = segment.startMs
+            viewModel.player.seekTo(skipTargetMs(segment, viewModel.player.duration))
+        }
+    }
+
+    // HUB-37: chapter marks on the native styled progress bar. Media3
+    // swaps the layout's exo_progress_placeholder for a real
+    // DefaultTimeBar (id exo_progress) at inflate time — it already
+    // supports drawing marks via the ad-break API, which is the only
+    // public hook this view offers for "ticks other than the played/
+    // buffered fill". A short retry (mirrors syncOrigin's shape) covers
+    // "direct" mode, where the true duration isn't known the instant
+    // Ready fires; HLS sessions already know it up front via the
+    // ForwardingPlayer override.
+    LaunchedEffect(chapters, playerView) {
+        val timeBar = playerView?.findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress) ?: return@LaunchedEffect
+        if (chapters.isEmpty()) {
+            timeBar.setAdGroupTimesMs(null, null, 0)
+            return@LaunchedEffect
+        }
+        repeat(10) {
+            val duration = viewModel.player.duration
+            if (duration != C.TIME_UNSET && duration > 0) {
+                val marks = chapterMarkTimesMs(chapters, duration)
+                timeBar.setAdGroupTimesMs(marks, BooleanArray(marks.size), marks.size)
+                return@LaunchedEffect
+            }
+            delay(300)
+        }
+    }
 
     fun flash(next: GestureIndicator, durationMs: Long = 700) {
         indicator = next
@@ -933,6 +997,28 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     color = Color.White,
                 )
+            }
+        }
+
+        // HUB-37. Bottom-end, clear of the transport, in its own corner
+        // regardless of whether the controls happen to be showing — an
+        // offer the viewer can act on any time, not just while they're
+        // interacting with the controller. Never drawn while auto-skip
+        // is on: at that point the LaunchedEffect above has already
+        // fired the seek, and a button that would show for a stray 300ms
+        // frame before the seek lands is just a flicker, not an offer.
+        val skipLabelResId = skipLabelRes(skippingSegment)
+        if (!isInPip && !autoSkipEnabled && skippingSegment != null && skipLabelResId != null) {
+            Button(
+                onClick = {
+                    val segment = skippingSegment
+                    viewModel.player.seekTo(skipTargetMs(segment, viewModel.player.duration))
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 96.dp),
+            ) {
+                Text(stringResource(skipLabelResId))
             }
         }
 

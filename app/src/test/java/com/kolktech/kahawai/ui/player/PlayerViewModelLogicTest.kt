@@ -1,6 +1,9 @@
 package com.kolktech.kahawai.ui.player
 
+import com.kolktech.kahawai.R
+import com.kolktech.kahawai.data.network.dto.Chapter
 import com.kolktech.kahawai.data.network.dto.Item
+import com.kolktech.kahawai.data.network.dto.Segment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -144,5 +147,102 @@ class PlayerViewModelLogicTest {
     fun `trims a trailing slash off the base url`() {
         val url = subtitleVttUrl(baseUrl = "https://hub.local/", itemId = "item1", trackId = 42, offsetMs = 0)
         assertEquals("https://hub.local/api/v1/items/item1/subtitles/42.vtt?shift_ms=0", url)
+    }
+
+    // skippableSegment / skipLabelRes / skipTargetMs
+
+    private fun segment(kind: String, startMs: Long, endMs: Long, source: String = "chromaprint") =
+        Segment(kind = kind, startMs = startMs, endMs = endMs, source = source)
+
+    @Test
+    fun `finds the segment the playhead is inside`() {
+        val intro = segment("intro", 10_000, 30_000)
+        val found = skippableSegment(listOf(intro), posMs = 15_000)
+        assertEquals(intro, found)
+    }
+
+    @Test
+    fun `returns null before the segment starts`() {
+        val intro = segment("intro", 10_000, 30_000)
+        assertNull(skippableSegment(listOf(intro), posMs = 9_999))
+    }
+
+    @Test
+    fun `returns null inside the tail where the button would be unpressable`() {
+        val intro = segment("intro", 10_000, 30_000)
+        // 30_000 - SKIP_TAIL_MS (1_500) = 28_500; at or past that, hidden.
+        assertNull(skippableSegment(listOf(intro), posMs = 28_500))
+    }
+
+    @Test
+    fun `honors a custom tail`() {
+        val intro = segment("intro", 10_000, 30_000)
+        assertNull(skippableSegment(listOf(intro), posMs = 25_000, tailMs = 10_000))
+    }
+
+    @Test
+    fun `ignores a segment of an unknown kind`() {
+        val weird = segment("preview", 10_000, 30_000)
+        assertNull(skippableSegment(listOf(weird), posMs = 15_000))
+    }
+
+    @Test
+    fun `first match wins when segments overlap`() {
+        val recap = segment("recap", 0, 20_000)
+        val intro = segment("intro", 10_000, 30_000)
+        val found = skippableSegment(listOf(recap, intro), posMs = 15_000)
+        assertEquals(recap, found)
+    }
+
+    @Test
+    fun `maps each known kind to its own label resource`() {
+        assertEquals(R.string.player_skip_recap, skipLabelRes(segment("recap", 0, 1_000)))
+        assertEquals(R.string.player_skip_intro, skipLabelRes(segment("intro", 0, 1_000)))
+        assertEquals(R.string.player_skip_credits, skipLabelRes(segment("credits", 0, 1_000)))
+        assertNull(skipLabelRes(segment("preview", 0, 1_000)))
+        assertNull(skipLabelRes(null))
+    }
+
+    @Test
+    fun `skip target lands at the segment end when short of the duration`() {
+        val credits = segment("credits", 100_000, 118_000)
+        assertEquals(118_000L, skipTargetMs(credits, durationMs = 130_000))
+    }
+
+    @Test
+    fun `skip target never lands on the very last second of the file`() {
+        val credits = segment("credits", 100_000, 120_000)
+        assertEquals(119_000L, skipTargetMs(credits, durationMs = 120_000))
+    }
+
+    @Test
+    fun `skip target is untouched when duration is unknown`() {
+        val credits = segment("credits", 100_000, 120_000)
+        assertEquals(120_000L, skipTargetMs(credits, durationMs = 0))
+    }
+
+    // chapterMarkTimesMs
+
+    @Test
+    fun `drops a chapter at zero and keeps the rest`() {
+        val chapters = listOf(
+            Chapter(startMs = 0, title = "Start"),
+            Chapter(startMs = 60_000, title = "Two"),
+        )
+        val marks = chapterMarkTimesMs(chapters, durationMs = 120_000)
+        assertEquals(listOf(60_000L), marks.toList())
+    }
+
+    @Test
+    fun `drops a chapter at or past the duration`() {
+        val chapters = listOf(Chapter(startMs = 60_000), Chapter(startMs = 120_000))
+        val marks = chapterMarkTimesMs(chapters, durationMs = 120_000)
+        assertEquals(listOf(60_000L), marks.toList())
+    }
+
+    @Test
+    fun `no marks when duration is unknown`() {
+        val chapters = listOf(Chapter(startMs = 60_000))
+        assertEquals(0, chapterMarkTimesMs(chapters, durationMs = 0).size)
     }
 }

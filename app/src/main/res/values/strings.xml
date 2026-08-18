@@ -49,6 +49,8 @@
     <string name="detail_resume">Resume</string>
     <string name="detail_play">Play</string>
     <string name="detail_subtitles_close">Close</string>
+    <string name="detail_chapters">Chapters</string>
+    <string name="detail_chapter_numbered">Chapter %1$d</string>
     <string name="resume_at">Resume at %1$dm</string>
     <string name="resume_at_percent">Resume at %1$dm (%2$d%%)</string>
     <string name="runtime_hours_minutes">%1$dh %2$dm</string>
@@ -119,6 +121,9 @@
     <string name="player_settings_remember_brightness_hint">Keep the brightness level you set in the player between sessions</string>
     <string name="player_settings_seeking">Seeking</string>
     <string name="player_settings_seeking_desc">Back %1$ss · Forward %2$ss</string>
+    <string name="player_settings_skipping">Skipping</string>
+    <string name="player_settings_auto_skip">Auto-skip intros &amp; outros</string>
+    <string name="player_settings_auto_skip_hint">Automatically skip recaps, intros and credits the hub has found, without waiting for the Skip button to be pressed</string>
 
     <!-- Seeking settings -->
     <string name="seeking_settings_title">Seeking</string>
@@ -212,4 +217,9 @@
     <string name="player_playback_failed">Playback failed: %1$s</string>
     <string name="player_seek_failed">Seek failed: %1$s</string>
     <string name="player_subtitle_switch_failed">Failed to switch subtitle: %1$s</string>
+
+    <!-- HUB-37: recap/intro/credits skip button -->
+    <string name="player_skip_recap">Skip recap</string>
+    <string name="player_skip_intro">Skip intro</string>
+    <string name="player_skip_credits">Skip credits</string>
 </resources>

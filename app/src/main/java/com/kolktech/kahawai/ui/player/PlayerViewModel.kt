@@ -34,7 +34,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.ApiClient
+import com.kolktech.kahawai.data.network.dto.Chapter
 import com.kolktech.kahawai.data.network.dto.Item
+import com.kolktech.kahawai.data.network.dto.Segment
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.readableMessage
@@ -145,6 +147,53 @@ internal fun matchesSideloadedTrackId(formatId: String?, wantedId: String): Bool
 /// local time — so cues must be shifted BACK by that amount.
 internal fun subtitleVttUrl(baseUrl: String, itemId: String, trackId: Long, offsetMs: Long): String =
     "${baseUrl.trimEnd('/')}/api/v1/items/$itemId/subtitles/$trackId.vtt?shift_ms=${-offsetMs}"
+
+/// HUB-37. What to offer to skip, and where pressing it lands — a
+/// faithful port of web/src/domain/segments.ts, which the hub's own
+/// scan (crate::segments) and web player were designed around.
+
+/// How close to a segment's end still counts as inside it. A button
+/// that appears for the last half second of an opening is a button
+/// nobody can press and everybody sees.
+internal const val SKIP_TAIL_MS = 1_500L
+
+/// kind -> the string resource for its skip button label. An unknown
+/// kind is ignored rather than offered as a bare "Skip".
+private val SKIP_LABELS: Map<String, Int> = mapOf(
+    "recap" to R.string.player_skip_recap,
+    "intro" to R.string.player_skip_intro,
+    "credits" to R.string.player_skip_credits,
+)
+
+/// The segment the playhead is inside, if any. The first match wins:
+/// the detector clamps its own recap to the opening's start, but a
+/// chapter-named boundary is stored as written and can overlap an
+/// inferred one, so inside an overlap the button follows whichever
+/// segment started first.
+internal fun skippableSegment(segments: List<Segment>, posMs: Long, tailMs: Long = SKIP_TAIL_MS): Segment? =
+    segments.firstOrNull { SKIP_LABELS.containsKey(it.kind) && posMs >= it.startMs && posMs < it.endMs - tailMs }
+
+internal fun skipLabelRes(segment: Segment?): Int? = segment?.let { SKIP_LABELS[it.kind] }
+
+/// Where the button lands: the end of the segment, but never the very
+/// last second of the file — a seek to the duration stalls on some
+/// players, and credits usually end exactly there.
+internal fun skipTargetMs(segment: Segment, durationMs: Long): Long {
+    val end = if (durationMs > 0) minOf(segment.endMs, durationMs - 1_000) else segment.endMs
+    return end.coerceAtLeast(0)
+}
+
+/// Chapter marks to draw on the seek bar, in the shape
+/// [DefaultTimeBar.setAdGroupTimesMs] wants: a chapter at zero is
+/// dropped (every file has one and it marks the left edge, where
+/// there's nothing to find), so is anything at or past the end.
+/// Mirrors web/src/domain/chapters.ts's chapterTicks.
+internal fun chapterMarkTimesMs(chapters: List<Chapter>, durationMs: Long): LongArray =
+    if (durationMs <= 0) {
+        LongArray(0)
+    } else {
+        chapters.map { it.startMs }.filter { it in 1 until durationMs }.toLongArray()
+    }
 
 @OptIn(UnstableApi::class)
 class PlayerViewModel(
@@ -374,6 +423,18 @@ class PlayerViewModel(
     private val _subtitleSession = MutableStateFlow<SubtitleSession?>(null)
     val subtitleSession: StateFlow<SubtitleSession?> = _subtitleSession
 
+    /// HUB-37: the recap/intro/credits boundaries the hub's background
+    /// sweep found for this item, and the file's own chapters — both
+    /// resolved alongside the subtitle list below, off the same QUERY
+    /// round trip (see start()). Empty means "nothing found" and
+    /// "nothing analysed yet" alike; PlayerScreen can't act on the
+    /// difference, same as the hub's own contract.
+    private val _segments = MutableStateFlow<List<Segment>>(emptyList())
+    val segments: StateFlow<List<Segment>> = _segments
+
+    private val _chapters = MutableStateFlow<List<Chapter>>(emptyList())
+    val chapters: StateFlow<List<Chapter>> = _chapters
+
     init {
         realPlayer.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -457,16 +518,21 @@ class PlayerViewModel(
                 // request below may only carry subtitle_track for a
                 // BURN-delivery pick (see the burnPickOrNull note), and
                 // delivery is only knowable from this list. Best-effort:
-                // a failure here means no subtitle picker entries, not a
-                // broken playback session, so it's swallowed rather than
-                // failing the whole start().
-                val tracks = try {
-                    repo.subtitles(itemId, profile)
+                // a failure here means no subtitle picker entries and no
+                // skip/chapter marks, not a broken playback session, so
+                // it's swallowed rather than failing the whole start().
+                // One QUERY carries all three (HUB-37: "the subtitle
+                // listing above rides along for the same reason").
+                val queried = try {
+                    repo.itemQuery(itemId, profile)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to load subtitle tracks for item=$itemId", e)
-                    emptyList()
+                    Log.w(TAG, "Failed to query item=$itemId for subtitles/segments/chapters", e)
+                    null
                 }
+                val tracks = queried?.negotiated?.subtitles ?: emptyList()
                 _subtitleTracks.value = tracks
+                _segments.value = queried?.segments ?: emptyList()
+                _chapters.value = queried?.chapters ?: emptyList()
                 // The Detail screen only carries the chosen track's id
                 // through nav args; resolve it against the list once
                 // it's loaded so the picker UI and text-delivery override

@@ -153,4 +153,14 @@ data class ItemDetail(
     /// this item unreachable right now. Not an error — the item still
     /// renders.
     val unavailable: String? = null,
+    /// The file's own chapters, on the item's timeline — present on both
+    /// GET and QUERY (crates/kahawai-hub/src/api.rs `ItemDetailResponse`).
+    /// Empty when the file declares none and when nothing has looked yet.
+    val chapters: List<Chapter> = emptyList(),
+    /// HUB-37: the recap/intro/credits boundaries the hub's background
+    /// sweep found for this item — only ever populated on a QUERY
+    /// response (`ItemQueryResult`, api.rs); a plain GET always reports
+    /// this empty. Empty also means "nothing found" and "nothing has
+    /// analysed yet" — a client cannot act on the difference.
+    val segments: List<Segment> = emptyList(),
 )
