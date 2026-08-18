@@ -249,16 +249,20 @@ class PlayerViewModel(
             .setAudioAttributes(AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)
             .build()
             .apply {
-                // Text tracks stay enabled but with no override selected —
-                // "off" by default. Sideloaded VTT (Text delivery) configs
-                // are attached per-MediaItem in attach(); switching between
-                // them is a TrackSelectionOverride (selectSubtitleTrack
-                // below), same mechanism as showAudioTrackMenu. Ass/Overlay
-                // delivery never touches this pipeline at all — those are
-                // out-of-band taps rendered by AssSubtitleOverlay /
+                // Text tracks start DISABLED, and applySubtitleTrackSelectionOverride
+                // re-enables the renderer only while a Text-delivery track is
+                // actually picked. "No override" is not "off": DefaultTrackSelector
+                // auto-selects a text track whose language matches the device's
+                // captioning locale or that carries SELECTION_FLAG_DEFAULT (which
+                // an MKV's embedded subtitle usually does, and direct sessions
+                // expose those straight to ExoPlayer). That's how a flattened
+                // built-in rendering showed up with subtitles "off", and doubled
+                // on top of AssSubtitleOverlay when an ASS track was picked.
+                // Ass/Overlay delivery never touches this pipeline at all — those
+                // are out-of-band taps rendered by AssSubtitleOverlay /
                 // ImageSubtitleOverlay.
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                     .build()
             }
     }
@@ -1088,10 +1092,14 @@ class PlayerViewModel(
     /// the selection is itself Text delivery — Ass/Overlay tracks are
     /// never part of ExoPlayer's own track groups.
     private fun applySubtitleTrackSelectionOverride() {
-        val track = _selectedSubtitleTrack.value
+        val textTrack = _selectedSubtitleTrack.value?.takeIf { it.delivery == "text" }
         val params = realPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-        if (track != null && track.delivery == "text") {
+            // Disabled unless a Text pick is live — see the ExoPlayer.Builder
+            // note above: leaving the renderer enabled lets the selector pick
+            // a text track we never asked for.
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textTrack == null)
+        if (textTrack != null) {
             // MergingMediaPeriod re-exposes every child source's formats
             // with the id rewritten to "<childIndex>:<originalId>"
             // (uniqueness across children — confirmed in 1.10.0
@@ -1101,7 +1109,7 @@ class PlayerViewModel(
             // text tracks never turned on. The hub's HLS playlists carry
             // no subtitle renditions of their own, so every TEXT group
             // is one of ours and suffix matching is unambiguous.
-            val wantedId = track.id.toString()
+            val wantedId = textTrack.id.toString()
             val group = realPlayer.currentTracks.groups.firstOrNull {
                 it.type == C.TRACK_TYPE_TEXT && matchesSideloadedTrackId(it.mediaTrackGroup.getFormat(0).id, wantedId)
             }
