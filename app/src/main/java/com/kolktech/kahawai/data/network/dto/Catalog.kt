@@ -121,6 +121,14 @@ data class Negotiated(
     val subtitles: List<SubtitleTrack> = emptyList(),
 )
 
+/// Why [ItemDetail.negotiated] is absent instead. The hub used to send a
+/// plain string here; it now sends a structured reason.
+@Serializable
+data class Unavailable(
+    val code: String,
+    val message: String,
+)
+
 /// The detail endpoint (crates/kahawai-hub/src/api.rs:2171-2311)
 /// overwrites the list endpoint's numeric `sources` count with the full
 /// array of source objects (api.rs:2239) — deliberately not the same
@@ -152,7 +160,7 @@ data class ItemDetail(
     /// a show/album with no source of its own, or every mediahost for
     /// this item unreachable right now. Not an error — the item still
     /// renders.
-    val unavailable: String? = null,
+    val unavailable: Unavailable? = null,
     /// The file's own chapters, on the item's timeline — present on both
     /// GET and QUERY (crates/kahawai-hub/src/api.rs `ItemDetailResponse`).
     /// Empty when the file declares none and when nothing has looked yet.

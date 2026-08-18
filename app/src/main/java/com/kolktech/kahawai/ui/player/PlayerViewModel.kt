@@ -551,6 +551,7 @@ class PlayerViewModel(
                     subtitleTrack = burnPickOrNull(initialTrack),
                 )
                 this@PlayerViewModel.session = session
+                applySessionSubtitleListing(session)
                 Log.d(
                     TAG,
                     "session started item=$itemId requestedStartMs=$startMs mode=${session.mode} " +
@@ -648,6 +649,7 @@ class PlayerViewModel(
                     subtitleTrack = burnPickOrNull(_selectedSubtitleTrack.value),
                 )
                 session = newSession
+                applySessionSubtitleListing(newSession)
                 val plan = resumePlan(newSession.mode, positionMs)
                 offsetMs = plan.offsetMs
                 attach(newSession, startPositionMs = plan.startPositionMs, requestedAbsMs = positionMs)
@@ -788,6 +790,23 @@ class PlayerViewModel(
     private fun burnPickOrNull(track: SubtitleTrack?): Long? =
         track?.takeIf { it.delivery == "burn" }?.id
 
+    /// The session is the delivery authority the instant it starts (see
+    /// [StartSessionResponse.subtitleListing]'s doc): the item QUERY's
+    /// listing that seeded the picker reflects the profile at page load,
+    /// and after a capability-masked restart the two can disagree — a
+    /// client still reading the QUERY's copy could keep rendering ASS
+    /// client-side while the session actually expects a burn. Called
+    /// right after every startSession, before attach() builds the
+    /// MediaItem off [_subtitleTracks], so text/ass/overlay sideloading
+    /// always reflects THIS session. Re-resolves the current pick by id
+    /// against the fresh list rather than trusting its old delivery.
+    private fun applySessionSubtitleListing(session: StartSessionResponse) {
+        val fresh = session.subtitleListing.ifEmpty { return }
+        val selectedId = _selectedSubtitleTrack.value?.id
+        _subtitleTracks.value = fresh
+        _selectedSubtitleTrack.value = fresh.firstOrNull { it.id == selectedId }
+    }
+
     private fun restartSessionWithSubtitle(subtitleTrackId: Long?, revertTo: SubtitleTrack?) {
         viewModelScope.launch {
             try {
@@ -803,6 +822,7 @@ class PlayerViewModel(
                     subtitleTrack = subtitleTrackId,
                 )
                 session = newSession
+                applySessionSubtitleListing(newSession)
                 // See start()'s comment on offsetMs/startPositionMs —
                 // and un-picking a burn can legitimately come back as a
                 // "direct" session, so both arrangements are reachable

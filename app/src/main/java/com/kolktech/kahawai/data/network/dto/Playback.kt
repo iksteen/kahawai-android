@@ -107,6 +107,13 @@ data class StartSessionResponse(
     val contentType: String,
     val streamUrl: String,
     val streams: StreamsVerdict? = null,
+    /// The unified track list computed against THIS session's effective
+    /// profile and negotiated source (kahawai commit 1eb6363). The item
+    /// QUERY's listing reflects the profile at page load; after a
+    /// capability-masked restart the two can disagree, so this is what
+    /// PlayerViewModel refreshes [PlayerViewModel.subtitleTracks] from
+    /// once a session actually starts.
+    val subtitleListing: List<SubtitleTrack> = emptyList(),
 )
 
 @Serializable
