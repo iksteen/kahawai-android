@@ -51,6 +51,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -1009,6 +1011,13 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
         // frame before the seek lands is just a flicker, not an offer.
         val skipLabelResId = skipLabelRes(skippingSegment)
         if (!isInPip && !autoSkipEnabled && skippingSegment != null && skipLabelResId != null) {
+            // Grabbing focus is only useful with a d-pad: on TV there's no
+            // pointer to click the button with, so unless it's focused a
+            // d-pad press has nothing to act on and the offer is dead.
+            val skipButtonFocusRequester = remember { FocusRequester() }
+            if (isTv) {
+                LaunchedEffect(Unit) { skipButtonFocusRequester.requestFocus() }
+            }
             Button(
                 onClick = {
                     val segment = skippingSegment
@@ -1016,7 +1025,8 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
                 },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 96.dp),
+                    .padding(end = 16.dp, bottom = 96.dp)
+                    .focusRequester(skipButtonFocusRequester),
             ) {
                 Text(stringResource(skipLabelResId))
             }
