@@ -1,7 +1,9 @@
 package com.kolktech.kahawai.ui
 
+import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -25,6 +27,25 @@ class MainActivity : ComponentActivity() {
     /// unless the player has registered.
     var onUserLeaveWithPlayback: (() -> Unit)? = null
     var pipModeListener: ((Boolean) -> Unit)? = null
+
+    /// Remote keys the player wants before Compose gets a say: transport
+    /// keys (play/pause, ff/rew), which otherwise reach nothing at all,
+    /// and the D-pad press that summons the controls, which Compose's
+    /// focus system would otherwise swallow moving focus around. Both
+    /// aim at the focused view, and that is never the PlayerView buried
+    /// in an AndroidView. Registered by the player screen for as long as
+    /// it's on-screen; every other key falls through untouched.
+    var onPlayerKey: ((KeyEvent) -> Boolean)? = null
+
+    /// androidx.core marks its own dispatchKeyEvent override
+    /// library-group-only, which makes overriding it here a RestrictedApi
+    /// error; the super call keeps its unhandled-key dispatch intact, and
+    /// the alternatives (onKeyDown, an unhandled-key listener) only fire
+    /// once the focused view has passed - which is exactly the case that
+    /// never happens here.
+    @SuppressLint("RestrictedApi")
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        onPlayerKey?.invoke(event) == true || super.dispatchKeyEvent(event)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
