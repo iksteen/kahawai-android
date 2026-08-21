@@ -37,6 +37,11 @@ android {
     }
 
     buildTypes {
+        // Side-by-side with an installed release build, so a test APK
+        // doesn't cost you the working one (label: src/debug/res).
+        debug {
+            applicationIdSuffix = ".debug"
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
