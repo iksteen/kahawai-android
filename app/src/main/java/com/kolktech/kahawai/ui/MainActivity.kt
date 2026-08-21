@@ -1,5 +1,6 @@
 package com.kolktech.kahawai.ui
 
+import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.os.Bundle
 import android.view.KeyEvent
@@ -36,6 +37,13 @@ class MainActivity : ComponentActivity() {
     /// it's on-screen; every other key falls through untouched.
     var onPlayerKey: ((KeyEvent) -> Boolean)? = null
 
+    /// androidx.core marks its own dispatchKeyEvent override
+    /// library-group-only, which makes overriding it here a RestrictedApi
+    /// error; the super call keeps its unhandled-key dispatch intact, and
+    /// the alternatives (onKeyDown, an unhandled-key listener) only fire
+    /// once the focused view has passed - which is exactly the case that
+    /// never happens here.
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
         onPlayerKey?.invoke(event) == true || super.dispatchKeyEvent(event)
 
