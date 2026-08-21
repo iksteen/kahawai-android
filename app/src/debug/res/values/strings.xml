@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Debug builds install alongside the release one (see
+         applicationIdSuffix in app/build.gradle.kts); they need their own
+         launcher label or the two rows are indistinguishable. -->
+    <string name="app_name">Kahawai (debug)</string>
+</resources>
