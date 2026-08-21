@@ -14,6 +14,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Rational
 import android.view.GestureDetector
+import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -99,6 +100,13 @@ private val RESIZE_MODES = listOf(
     AspectRatioFrameLayout.RESIZE_MODE_FIT to R.string.resize_fit,
     AspectRatioFrameLayout.RESIZE_MODE_ZOOM to R.string.resize_crop,
     AspectRatioFrameLayout.RESIZE_MODE_FILL to R.string.resize_stretch,
+)
+
+private val DPAD_KEYS = setOf(
+    KeyEvent.KEYCODE_DPAD_UP,
+    KeyEvent.KEYCODE_DPAD_DOWN,
+    KeyEvent.KEYCODE_DPAD_LEFT,
+    KeyEvent.KEYCODE_DPAD_RIGHT,
 )
 
 private val PLAYBACK_SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
@@ -383,6 +391,36 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
                 }
             }
             .build()
+    }
+
+    // Remote keys, routed straight from the activity (see
+    // MainActivity.onPlayerKey). PlayerView already knows what to do with
+    // transport keys and with a D-pad press while the controls are
+    // hidden - it just never sees either, so both are handed to it here.
+    // Everything else, including the D-pad once the controls are up,
+    // returns false and dispatches normally.
+    DisposableEffect(mainActivity, playerView) {
+        val view = playerView
+        if (mainActivity == null || view == null) {
+            onDispose {}
+        } else {
+            mainActivity.onPlayerKey = { event ->
+                when {
+                    view.dispatchMediaKeyEvent(event) -> {
+                        // Flash the controls up so ff/rew has a timebar to
+                        // aim by - except in PiP, whose window has its own.
+                        if (!mainActivity.isInPictureInPictureMode) view.showController()
+                        true
+                    }
+                    event.keyCode in DPAD_KEYS && !view.isControllerFullyVisible -> {
+                        if (event.action == KeyEvent.ACTION_DOWN) view.showController()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            onDispose { mainActivity.onPlayerKey = null }
+        }
     }
 
     DisposableEffect(mainActivity, supportsPip, viewModel) {
@@ -891,6 +929,18 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
                     // playback starts/pauses/ends.
                     controllerAutoShow = false
                     hideController()
+                    // A d-pad press while the controls are hidden is
+                    // swallowed by PlayerView just to show them, without
+                    // moving focus - so the bar takes two presses to
+                    // reach. Land focus on it (the play button, first
+                    // focusable in kw_player_control_view) as soon as it
+                    // appears, whichever path showed it. No-op in touch
+                    // mode, where none of these buttons take focus.
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            if (visibility == View.VISIBLE) requestFocus()
+                        },
+                    )
                     resizeMode = RESIZE_MODES[resizeModeIndex].first
                     // Taps reach performClick via the gesture detector's
                     // onSingleTapUp (see above), satisfying the
