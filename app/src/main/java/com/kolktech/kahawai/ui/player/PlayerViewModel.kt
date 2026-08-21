@@ -451,8 +451,24 @@ class PlayerViewModel(
 
             override fun getContentBufferedPosition(): Long = contentBufferedPositionOrSuper()
 
-            private fun contentBufferedPositionOrSuper(): Long =
-                if (session?.mode == "direct") super.getBufferedPosition() else offsetMs + realPlayer.bufferedPosition
+            /// The END of what a seek can reach without waiting on the
+            /// hub — [seekWindowStartMs] is its start, and SeekWindowTimeBar
+            /// shades the range between them. NOT the handful of seconds
+            /// ExoPlayer has downloaded, which is what realPlayer reports
+            /// and which says nothing about what a seek costs: for an HLS
+            /// session everything up to the produced edge is a plain local
+            /// seek and everything past it a pipeline restart (see
+            /// localSeekPositionMs), and realPlayer's playlist duration IS
+            /// that produced edge. A direct session has no pipeline to
+            /// restart — it's a byte-range-seekable file, reachable end to
+            /// end. The downloaded position stays the floor for the moment
+            /// before the playlist's length is known.
+            private fun contentBufferedPositionOrSuper(): Long {
+                if (session?.mode == "direct") return super.getDuration()
+                val downloadedMs = offsetMs + realPlayer.bufferedPosition
+                val producedMs = realPlayer.duration.takeIf { it != C.TIME_UNSET } ?: return downloadedMs
+                return maxOf(downloadedMs, offsetMs + producedMs)
+            }
 
             override fun isCurrentMediaItemSeekable(): Boolean =
                 if (session?.mode != "direct") true else super.isCurrentMediaItemSeekable()
@@ -492,6 +508,15 @@ class PlayerViewModel(
     /// The scope track picks are remembered under — see start().
     private var seriesId: String? = null
     private var prefsJob: Job? = null
+
+    /// The START of what a seek can reach without waiting on the hub: the
+    /// absolute position the current playlist begins at, since nothing
+    /// before it is in the playlist at all (a rewind past it restarts the
+    /// pipeline). Zero for a direct session, which is seekable end to end.
+    /// SeekWindowTimeBar reads this live to shade the bar; the range's end
+    /// is player.bufferedPosition.
+    val seekWindowStartMs: Long
+        get() = if (session?.mode == "direct") 0 else offsetMs
 
     private var session: StartSessionResponse? = null
     private var offsetMs: Long = 0

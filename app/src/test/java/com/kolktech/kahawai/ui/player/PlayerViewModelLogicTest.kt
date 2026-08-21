@@ -80,6 +80,34 @@ class PlayerViewModelLogicTest {
         assertNull(localSeekPositionMs(targetMs = 720_000, offsetMs = 600_000, producedMs = C.TIME_UNSET))
     }
 
+    // seekWindowBandPx
+
+    @Test
+    fun `the band spans the window across the bar's own edges`() {
+        // Bar drawn from x=100 to x=1100; window covers the second half.
+        val band = seekWindowBandPx(startMs = 50_000, endMs = 100_000, durationMs = 100_000, leftPx = 100, rightPx = 1100)
+        assertEquals(600..1100, band)
+    }
+
+    @Test
+    fun `a window covering everything spans the whole bar`() {
+        val band = seekWindowBandPx(startMs = 0, endMs = 100_000, durationMs = 100_000, leftPx = 100, rightPx = 1100)
+        assertEquals(100..1100, band)
+    }
+
+    @Test
+    fun `an empty or unmeasured bar draws nothing`() {
+        assertNull(seekWindowBandPx(startMs = 0, endMs = 100_000, durationMs = 0, leftPx = 100, rightPx = 1100))
+        assertNull(seekWindowBandPx(startMs = 0, endMs = 100_000, durationMs = 100_000, leftPx = 100, rightPx = 100))
+        assertNull(seekWindowBandPx(startMs = 50_000, endMs = 50_000, durationMs = 100_000, leftPx = 100, rightPx = 1100))
+    }
+
+    @Test
+    fun `a window running past the ends is clamped to the bar`() {
+        val band = seekWindowBandPx(startMs = -5_000, endMs = 200_000, durationMs = 100_000, leftPx = 100, rightPx = 1100)
+        assertEquals(100..1100, band)
+    }
+
     // resolveNextEpisode
 
     @Test
