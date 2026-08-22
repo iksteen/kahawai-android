@@ -473,6 +473,35 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
         }
     }
 
+    // Keep the screen on while video is actually playing so it doesn't
+    // time out mid-playback; let normal Android screen-timeout resume
+    // as soon as playback is paused or stopped. FLAG_KEEP_SCREEN_ON
+    // needs no manifest permission, unlike a PowerManager WakeLock.
+    DisposableEffect(activity, viewModel) {
+        val window = activity?.window
+        if (window == null) {
+            onDispose {}
+        } else {
+            val listener = object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
+            }
+            viewModel.player.addListener(listener)
+            if (viewModel.player.isPlaying) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            onDispose {
+                viewModel.player.removeListener(listener)
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
     // Recoverable failures (failed seek, failed subtitle switch) — the
     // stream is still playing, so they get a snackbar here rather than
     // the terminal PlayerState.Error screen.
