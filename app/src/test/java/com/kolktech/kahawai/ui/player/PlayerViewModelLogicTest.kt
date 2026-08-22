@@ -1,5 +1,6 @@
 package com.kolktech.kahawai.ui.player
 
+import androidx.media3.common.C
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.Chapter
 import com.kolktech.kahawai.data.network.dto.Item
@@ -36,6 +37,47 @@ class PlayerViewModelLogicTest {
     fun `both modes converge when startMs is zero`() {
         assertEquals(ResumePlan(offsetMs = 0, startPositionMs = 0), resumePlan("direct", startMs = 0))
         assertEquals(ResumePlan(offsetMs = 0, startPositionMs = 0), resumePlan("remux", startMs = 0))
+    }
+
+    // localSeekPositionMs
+
+    @Test
+    fun `a target inside the produced window seeks locally`() {
+        // Playlist starts at 10:00 and 5 minutes of it have been produced.
+        val local = localSeekPositionMs(targetMs = 720_000, offsetMs = 600_000, producedMs = 300_000)
+        assertEquals(120_000L, local)
+    }
+
+    @Test
+    fun `a target before the playlist start needs the hub`() {
+        assertNull(localSeekPositionMs(targetMs = 599_000, offsetMs = 600_000, producedMs = 300_000))
+    }
+
+    @Test
+    fun `a target past the produced edge needs the hub`() {
+        assertNull(localSeekPositionMs(targetMs = 960_000, offsetMs = 600_000, producedMs = 300_000))
+    }
+
+    @Test
+    fun `the produced edge itself is left to the hub`() {
+        // Exactly at the edge, and just inside it by less than the tail:
+        // both would land on content the encoder hasn't reached yet.
+        assertNull(localSeekPositionMs(targetMs = 900_000, offsetMs = 600_000, producedMs = 300_000))
+        assertNull(localSeekPositionMs(targetMs = 898_000, offsetMs = 600_000, producedMs = 300_000))
+        assertEquals(
+            297_000L,
+            localSeekPositionMs(targetMs = 897_000, offsetMs = 600_000, producedMs = 300_000),
+        )
+    }
+
+    @Test
+    fun `the playlist start itself seeks locally`() {
+        assertEquals(0L, localSeekPositionMs(targetMs = 600_000, offsetMs = 600_000, producedMs = 300_000))
+    }
+
+    @Test
+    fun `an unknown produced length needs the hub`() {
+        assertNull(localSeekPositionMs(targetMs = 720_000, offsetMs = 600_000, producedMs = C.TIME_UNSET))
     }
 
     // resolveNextEpisode

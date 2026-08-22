@@ -148,6 +148,35 @@ internal fun matchesSideloadedTrackId(formatId: String?, wantedId: String): Bool
 internal fun subtitleVttUrl(baseUrl: String, itemId: String, trackId: Long, offsetMs: Long): String =
     "${baseUrl.trimEnd('/')}/api/v1/items/$itemId/subtitles/$trackId.vtt?shift_ms=${-offsetMs}"
 
+/// How much of the produced HLS window's tail to treat as out of reach
+/// for a local seek. The hub keeps extending the playlist as it encodes,
+/// so its very edge is a moving target: landing on it means sitting at
+/// BUFFERING waiting for the encoder rather than playing, which is the
+/// one case where restarting the pipeline at the target is genuinely
+/// the better deal.
+internal const val LOCAL_SEEK_TAIL_MS = 3_000L
+
+/// Where a seek to absolute [targetMs] lands in the current playlist's
+/// own timeline, or null if it lands outside it and the hub has to
+/// restart the pipeline at the target instead (see handleSeek).
+/// [offsetMs] is the absolute position the playlist starts at and
+/// [producedMs] the length the hub has encoded so far ([C.TIME_UNSET]
+/// before the playlist's duration is known). The playlist is an EVENT
+/// one — nothing is ever dropped from its head — so everything from its
+/// start up to the produced edge is reachable locally, which is what
+/// makes a 10-second rewind cost nothing instead of a full remux
+/// restart.
+internal fun localSeekPositionMs(
+    targetMs: Long,
+    offsetMs: Long,
+    producedMs: Long,
+    tailMs: Long = LOCAL_SEEK_TAIL_MS,
+): Long? {
+    if (producedMs == C.TIME_UNSET) return null
+    val localMs = targetMs - offsetMs
+    return localMs.takeIf { it >= 0 && it <= producedMs - tailMs }
+}
+
 /// HUB-37. What to offer to skip, and where pressing it lands — a
 /// faithful port of web/src/domain/segments.ts, which the hub's own
 /// scan (crate::segments) and web player were designed around.
@@ -273,11 +302,8 @@ class PlayerViewModel(
     /// (§6 seek-anywhere, HUB-18), not a raw ExoPlayer seek — this
     /// reroutes the controller's seek/seekForward/seekBack through that
     /// logic transparently, mirroring web/src/views/Player.tsx:633-663.
-    /// Unlike the web client we don't check whether the target is
-    /// already inside the produced window first; every HLS seek
-    /// round-trips through the hub. Simpler, always correct, and only
-    /// costs a network round trip on a seek that could sometimes have
-    /// been served locally — a fine trade for a first playback pass.
+    /// A target already inside the produced window skips that round trip
+    /// and seeks locally instead — see handleSeek/localSeekPositionMs.
     val player: Player by lazy {
         object : ForwardingPlayer(realPlayer) {
             /// The seekbar now displays ABSOLUTE position/duration — the
@@ -718,6 +744,26 @@ class PlayerViewModel(
             return
         }
         Log.d(TAG, "seek requested item=$itemId sessionId=${session.sessionId} targetMs=$targetMs currentOffsetMs=$offsetMs")
+        // Already inside the produced window: seek there directly. A hub
+        // seek tears down and restarts the whole remux/transcode pipeline
+        // and re-attaches a fresh playlist — seconds of black frames for
+        // content this playlist can already reach. Skipped while a hub
+        // seek is in flight: that one has already restarted the pipeline
+        // somewhere else, so this playlist (and the offsetMs this target
+        // was measured against) is on its way out.
+        if (seekJob?.isActive != true) {
+            localSeekPositionMs(targetMs, offsetMs, realPlayer.duration)?.let { localMs ->
+                Log.d(TAG, "seek served locally item=$itemId localMs=$localMs")
+                realPlayer.seekTo(localMs)
+                // The hub paces production against the last reported
+                // viewer position (kahawai-media's install_pace_probe),
+                // and nothing else here tells it the playhead moved —
+                // waiting up to a progress tick to mention a jump
+                // forward just stalls the encoder that much longer.
+                reportProgressNow()
+                return
+            }
+        }
         // Seeks must not overlap: each one is pause -> hub round trip ->
         // offsetMs/attach, and two in flight at once (rapid double-taps,
         // repeated scrubber drags) race on whose response lands last —
