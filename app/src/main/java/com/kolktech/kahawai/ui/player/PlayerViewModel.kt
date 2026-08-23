@@ -766,6 +766,35 @@ class PlayerViewModel(
         _isPaused.value = !realPlayer.playWhenReady && realPlayer.playbackState == Player.STATE_READY
     }
 
+    /// Called when the activity is genuinely backgrounded (Home, recents —
+    /// see PlayerScreen's ON_STOP observer), not just user-paused. A plain
+    /// pause() leaves playbackState at STATE_READY, and ExoPlayer's
+    /// handleAudioFocus only abandons audio focus once playbackState hits
+    /// STATE_IDLE (see AudioFocusManager.shouldHandleAudioFocus) — so a
+    /// merely-paused player stays registered as the platform's audio focus
+    /// listener for as long as it sits in the background. Any unrelated
+    /// AUDIOFOCUS_GAIN the system later delivers to that listener (observed
+    /// when switching the TV's input) makes ExoPlayer force playWhenReady
+    /// back to true on its own (AudioFocusManager.handlePlatformAudioFocusChange
+    /// -> executePlayerCommand(PLAYER_COMMAND_PLAY_WHEN_READY)), resuming
+    /// playback nothing in this app asked to resume. stop() drives
+    /// playbackState to STATE_IDLE, which makes ExoPlayer abandon audio
+    /// focus for good, while leaving the MediaItem and position intact —
+    /// onForegrounded() only needs to prepare() again.
+    fun onBackgrounded() {
+        if (realPlayer.playbackState == Player.STATE_IDLE) return
+        realPlayer.playWhenReady = false
+        realPlayer.stop()
+    }
+
+    /// Mirrors onBackgrounded(): re-buffers at the position stop() left
+    /// behind. playWhenReady is already false from onBackgrounded(), so
+    /// this brings the player back to a paused, ready-to-resume state
+    /// rather than auto-playing.
+    fun onForegrounded() {
+        if (realPlayer.playbackState == Player.STATE_IDLE) realPlayer.prepare()
+    }
+
     /// STATE_ENDED can fire more than once (e.g. a stray onPlaybackStateChanged
     /// replay), so [playbackEndedHandled] guards against issuing the
     /// children() lookup twice. The current session/progress teardown is

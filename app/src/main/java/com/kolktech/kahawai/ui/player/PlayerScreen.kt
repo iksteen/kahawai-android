@@ -220,19 +220,27 @@ fun PlayerScreen(
         }
     }
 
-    // Pause the moment the app stops being visible: home button, app
+    // Stop the moment the app stops being visible: home button, app
     // switcher, an incoming call's full-screen UI, etc. Rotating the
     // device also fires ON_STOP (Android tears the activity down and
     // recreates it for the config change) but that's not "backgrounded" -
     // isChangingConfigurations tells the two apart so a rotation doesn't
-    // pause playback. A call that doesn't take over the screen (just
+    // stop playback. A call that doesn't take over the screen (just
     // rings) is instead caught by ExoPlayer's own audio-focus handling
-    // (see PlayerViewModel).
+    // (see PlayerViewModel). onBackgrounded()/onForegrounded() (rather
+    // than a plain pause()) is what keeps a backgrounded player from
+    // silently resuming itself on an unrelated audio-focus change later
+    // (see onBackgrounded()'s doc in PlayerViewModel) — ON_START is the
+    // exact pair of the ON_STOP this backgrounds on.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && context.findActivity()?.isChangingConfigurations != true) {
-                viewModel.player.pause()
+            if (context.findActivity()?.isChangingConfigurations != true) {
+                when (event) {
+                    Lifecycle.Event.ON_STOP -> viewModel.onBackgrounded()
+                    Lifecycle.Event.ON_START -> viewModel.onForegrounded()
+                    else -> {}
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
