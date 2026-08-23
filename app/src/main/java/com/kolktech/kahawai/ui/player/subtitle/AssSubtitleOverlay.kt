@@ -62,6 +62,10 @@ fun AssSubtitleOverlay(
     track: SubtitleTrack,
     subtitleSession: SubtitleSession,
     resizeMode: Int,
+    /// How much of the bottom of the screen is spoken for right now — the
+    /// controls, while they're up. Cues that would land under it are lifted
+    /// clear, the same way they're lifted out of a Zoom(crop) overflow.
+    bottomInsetPx: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
@@ -326,7 +330,7 @@ fun AssSubtitleOverlay(
                     ),
                 )
             }
-            shiftBottomOverflowIntoView(positioned.map { it.third }, size.height)
+            shiftBottomOverflowIntoView(positioned.map { it.third }, size.height, bottomInsetPx)
             positioned.forEach { (tex, bitmap, dst) ->
                 // ASS colors pack RGB in the upper 3 bytes and alpha
                 // INVERTED (0 = opaque) in the low byte; tex.bitmap is an

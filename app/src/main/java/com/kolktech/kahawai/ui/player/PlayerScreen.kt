@@ -53,6 +53,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -86,7 +87,6 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.DefaultTrackNameProvider
 import androidx.media3.ui.PlayerView
-import androidx.media3.ui.SubtitleView
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.dto.displayLabel
@@ -100,6 +100,48 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/// How far up cues have to sit while the controls are up: the whole band
+/// the controller's bottom cluster occupies, taken from media3's own layout
+/// dimens rather than a number of our own, so it follows the bar the
+/// controller actually draws (kw_player_control_view.xml lays both out with
+/// exactly these).
+private fun controlsInsetPx(context: Context): Float = maxOf(
+    context.resources.getDimension(androidx.media3.ui.R.dimen.exo_styled_bottom_bar_height),
+    context.resources.getDimension(androidx.media3.ui.R.dimen.exo_styled_progress_margin_bottom) +
+        context.resources.getDimension(androidx.media3.ui.R.dimen.exo_styled_progress_layout_height),
+)
+
+/// Where SubtitleView ("text" delivery) puts its cues: padding, not
+/// setBottomPaddingFraction, which media3 only honours for cues that carry
+/// NO line of their own — and these all do. Every cue this client renders
+/// comes from a sideloaded VTT, and media3's WebVTT parser spells the
+/// format's default "auto" line as LINE_TYPE_NUMBER -1, "the last line from
+/// the bottom", which is a position. Padding moves the box those lines are
+/// counted in, so it moves every cue whatever it asks for.
+///
+/// Two things ask for room. The view fills exo_content_frame, which sits
+/// centred in the player view — letterboxed above the controls when it's
+/// smaller than the view, and pushed past the screen edges by Zoom(crop)
+/// when it's bigger, which is what puts cues below the visible bottom. And
+/// the controls, which cues must clear for as long as they're up. (The
+/// Ass/Image overlays span the whole view rather than the frame, and handle
+/// both themselves via shiftBottomOverflowIntoView.)
+private fun applyCueBottomPadding(view: PlayerView, insetPx: Float) {
+    val frameH = view.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame).height.toFloat()
+    if (frameH <= 0f || view.height <= 0) return
+    view.subtitleView?.setPadding(0, 0, 0, cueBottomPaddingPx(frameH, view.height.toFloat(), insetPx))
+}
+
+/// The arithmetic behind [applyCueBottomPadding], in the frame's own terms:
+/// how much of its bottom to keep clear of cues.
+internal fun cueBottomPaddingPx(frameH: Float, visibleH: Float, insetPx: Float): Int {
+    // The frame is centred, so its own bottom edge already sits this far
+    // above the view's — negative when it overflows instead, which is then
+    // exactly how much of it hangs off the bottom of the screen.
+    val letterboxPx = (visibleH - frameH) / 2f
+    return (insetPx - letterboxPx).coerceAtLeast(0f).roundToInt()
+}
 
 // Labels are @StringRes ids, not resolved strings — this is a top-level
 // property (evaluated once at class-load, outside any Composable/Context),
@@ -357,6 +399,11 @@ private fun PlayerContent(
     var indicator by remember { mutableStateOf<GestureIndicator?>(null) }
     var hideJob by remember { mutableStateOf<Job?>(null) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    // Cues ride above the controls for as long as they're up, whichever
+    // renderer draws them.
+    var controlsShown by remember { mutableStateOf(false) }
+    val cueInsetPx = if (controlsShown) remember(context) { controlsInsetPx(context) } else 0f
+    val liveCueInsetPx = rememberUpdatedState(cueInsetPx)
     var resizeModeIndex by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val title by viewModel.title.collectAsState()
@@ -1042,6 +1089,7 @@ private fun PlayerContent(
                     // focus.
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
+                            controlsShown = visibility == View.VISIBLE
                             if (visibility == View.VISIBLE) {
                                 findViewById<ImageButton>(androidx.media3.ui.R.id.exo_play_pause)?.requestFocus()
                                     ?: requestFocus()
@@ -1068,37 +1116,27 @@ private fun PlayerContent(
                     findViewById<ImageButton>(androidx.media3.ui.R.id.exo_subtitle).setOnClickListener { anchor ->
                         showSubtitleTrackMenu(ctx, anchor)
                     }
-                    // SubtitleView ("text" delivery) lives inside
-                    // exo_content_frame, which Zoom(crop) scales past the
-                    // screen edges — cues keep their bottom padding
-                    // relative to the OVERFLOWING frame and land below the
-                    // visible screen. Re-derive the padding so cues sit
-                    // the default fraction above the *visible* bottom edge
-                    // instead; hooked on the frame's layout since both
+                    // Hooked on the content frame's layout, since both
                     // resize-mode switches and video-size changes relayout
-                    // it. (The Ass/Image overlays handle the same problem
-                    // themselves via shiftBottomOverflowIntoView.)
+                    // it; the controls moving re-applies it from the
+                    // LaunchedEffect below instead (nothing relayouts when
+                    // they fade in). See applyCueBottomPadding.
                     findViewById<View>(androidx.media3.ui.R.id.exo_content_frame)
-                        .addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
-                            val frameH = (bottom - top).toFloat()
-                            val visibleH = height.toFloat()
-                            if (frameH <= 0f || visibleH <= 0f) return@addOnLayoutChangeListener
-                            val default = SubtitleView.DEFAULT_BOTTOM_PADDING_FRACTION
-                            val fraction = if (frameH > visibleH) {
-                                // The frame overflows equally top and
-                                // bottom (it's centered), so cue bottoms
-                                // must clear half the overflow plus the
-                                // default margin of the visible height.
-                                ((frameH - visibleH) / 2f + default * visibleH) / frameH
-                            } else {
-                                default
-                            }
-                            subtitleView?.setBottomPaddingFraction(fraction)
+                        .addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                            applyCueBottomPadding(this, liveCueInsetPx.value)
                         }
                     playerView = this
                 }
             },
         )
+
+        // Nothing relayouts when the controls fade in or out, so the text
+        // renderer's padding is re-applied here; the overlays take the same
+        // inset as a parameter and shift their own cues.
+        LaunchedEffect(cueInsetPx, playerView) {
+            playerView?.let { applyCueBottomPadding(it, cueInsetPx) }
+        }
+
 
         val activeSession = subtitleSession
         if (activeSession != null) {
@@ -1109,6 +1147,7 @@ private fun PlayerContent(
                     track = selectedSubtitle!!,
                     subtitleSession = activeSession,
                     resizeMode = RESIZE_MODES[resizeModeIndex].first,
+                    bottomInsetPx = cueInsetPx,
                     modifier = Modifier.fillMaxSize(),
                 )
                 "ass" -> AssSubtitleOverlay(
@@ -1118,6 +1157,7 @@ private fun PlayerContent(
                     track = selectedSubtitle!!,
                     subtitleSession = activeSession,
                     resizeMode = RESIZE_MODES[resizeModeIndex].first,
+                    bottomInsetPx = cueInsetPx,
                     modifier = Modifier.fillMaxSize(),
                 )
                 // "text" renders natively via PlayerView's own subtitle

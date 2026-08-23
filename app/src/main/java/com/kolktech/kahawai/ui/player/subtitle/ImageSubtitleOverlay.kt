@@ -111,10 +111,15 @@ internal fun contentRectFor(containerW: Float, containerH: Float, videoW: Float,
 /// bottom half of the screen move — top-anchored signs stay anchored to
 /// the video frame and crop with it, same as burn-in. No-op outside Zoom:
 /// Fit/Fill keep every rect inside the container, so delta is zero.
-internal fun shiftBottomOverflowIntoView(dsts: List<RectF>, containerH: Float) {
+///
+/// [bottomInsetPx] raises the line they have to clear without moving the
+/// half they're measured against: the controls take room off the bottom of
+/// the screen, they don't make the screen shorter.
+internal fun shiftBottomOverflowIntoView(dsts: List<RectF>, containerH: Float, bottomInsetPx: Float = 0f) {
     val half = containerH / 2f
+    val clearBelow = containerH - bottomInsetPx
     var delta = 0f
-    for (d in dsts) if (d.centerY() > half) delta = maxOf(delta, d.bottom - containerH)
+    for (d in dsts) if (d.centerY() > half) delta = maxOf(delta, d.bottom - clearBelow)
     if (delta <= 0f) return
     for (d in dsts) if (d.centerY() > half) d.offset(0f, -delta)
 }
@@ -139,6 +144,10 @@ fun ImageSubtitleOverlay(
     track: SubtitleTrack,
     subtitleSession: SubtitleSession,
     resizeMode: Int,
+    /// How much of the bottom of the screen is spoken for right now — the
+    /// controls, while they're up. Cues that would land under it are lifted
+    /// clear, the same way they're lifted out of a Zoom(crop) overflow.
+    bottomInsetPx: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     val sets = remember(subtitleSession.epoch, track.id) { mutableStateOf(emptyList<DisplaySet>()) }
@@ -305,7 +314,7 @@ fun ImageSubtitleOverlay(
                 val y = (obj.y * scaleY).coerceIn(0f, (rect.height - h).coerceAtLeast(0f))
                 RectF(rect.left + x, rect.top + y, rect.left + x + w, rect.top + y + h)
             }
-            shiftBottomOverflowIntoView(dsts, size.height)
+            shiftBottomOverflowIntoView(dsts, size.height, bottomInsetPx)
             set.objects.forEachIndexed { index, obj ->
                 canvas.nativeCanvas.drawBitmap(obj.bitmap, null, dsts[index], paint)
             }
