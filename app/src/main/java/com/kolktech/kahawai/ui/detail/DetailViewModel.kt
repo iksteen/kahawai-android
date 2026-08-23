@@ -5,6 +5,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.network.dto.ItemDetail
@@ -12,7 +15,18 @@ import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.isAuthError
 import com.kolktech.kahawai.data.network.readableMessage
 import com.kolktech.kahawai.data.repository.CatalogRepository
+import com.kolktech.kahawai.data.repository.PreferencesRepository
 import com.kolktech.kahawai.playback.CapabilityProfileBuilder
+import com.kolktech.kahawai.playback.PREF_AUDIO
+import com.kolktech.kahawai.playback.PREF_AUDIO_TRACK
+import com.kolktech.kahawai.playback.needsMediaType
+import com.kolktech.kahawai.playback.rememberedAudioValue
+import com.kolktech.kahawai.playback.resolveAudioTrack
+import com.kolktech.kahawai.playback.PREF_SUBS
+import com.kolktech.kahawai.playback.PREF_SUBS_TRACK
+import com.kolktech.kahawai.playback.rememberedSubsTrackValue
+import com.kolktech.kahawai.playback.rememberedSubsValue
+import com.kolktech.kahawai.playback.resolveSubtitleTrack
 
 /// Containers with no media of their own — you drill into a child
 /// (episode/track) to get a Play button.
@@ -38,7 +52,17 @@ class DetailViewModel(
     application: Application,
     private val repo: CatalogRepository,
     private val itemId: String,
+    /// Which library this item was opened from. The item's own detail
+    /// doesn't name one (the hub only puts library_id on browse rows), and
+    /// without it the account's per-media-type track lists can't be found
+    /// at all — see TrackChoice.
+    private val libraryId: String?,
+    private val prefsRepo: PreferencesRepository = PreferencesRepository(),
 ) : AndroidViewModel(application) {
+    /// The scope a subtitle pick is remembered under (HUB-33): the show, so
+    /// every episode of it opens the same way. Known once the item loads.
+    private var seriesId: String? = null
+    private var prefsJob: Job? = null
     private val _state = MutableStateFlow<DetailState>(DetailState.Loading)
     val state: StateFlow<DetailState> = _state
 
@@ -64,6 +88,13 @@ class DetailViewModel(
                 // with delivery computed for this profile (replaces the
                 // deleted `GET /items/{id}/subtitles` call).
                 val profile = CapabilityProfileBuilder.build(getApplication())
+                // Both best-effort and both started before the QUERY they
+                // overlap: preferences that failed to load cost the
+                // remembered subtitle pick, not the screen.
+                val prefs = async { runCatching { prefsRepo.all() }.getOrDefault(emptyList()) }
+                val libraries = async(start = CoroutineStart.LAZY) {
+                    runCatching { repo.libraries() }.getOrDefault(emptyList())
+                }
                 val detail = repo.queryItem(itemId, profile)
                 val children = if (detail.kind == "show" || detail.kind == "album") {
                     repo.children(itemId)
@@ -71,7 +102,35 @@ class DetailViewModel(
                     emptyList()
                 }
                 val subtitleTracks = detail.negotiated?.subtitles ?: emptyList()
-                _state.value = DetailState.Loaded(detail, children, subtitleTracks)
+                seriesId = detail.parentId ?: detail.id
+                // What this title is remembered as being watched with, so
+                // the picker opens on the track Play is about to use rather
+                // than on "none" (see TrackChoice).
+                val known = prefs.await()
+                val mediaType = if (needsMediaType(known) && libraryId != null) {
+                    libraries.await().firstOrNull { it.id == libraryId }?.mediaType ?: ""
+                } else {
+                    ""
+                }
+                // What this title is remembered as being watched with, so the
+                // pickers open on the tracks Play is about to use rather than
+                // on "none" and track zero (see TrackChoice).
+                val selected = resolveSubtitleTrack(
+                    prefs = known,
+                    seriesId = seriesId ?: itemId,
+                    itemId = itemId,
+                    mediaType = mediaType,
+                    tracks = subtitleTracks,
+                )
+                val audio = resolveAudioTrack(
+                    prefs = known,
+                    seriesId = seriesId ?: itemId,
+                    itemId = itemId,
+                    mediaType = mediaType,
+                    originalLanguage = detail.metadata?.originalLanguage,
+                    audio = detail.sources.firstOrNull()?.streams?.audio ?: emptyList(),
+                )
+                _state.value = DetailState.Loaded(detail, children, subtitleTracks, selected, audio)
             } catch (e: Exception) {
                 _state.value = DetailState.Error(e.readableMessage(), e.isAuthError())
             }
@@ -139,13 +198,47 @@ class DetailViewModel(
         }
     }
 
+    /// A pick here is a pick, not a one-playback override: it's remembered
+    /// exactly as the player's own picker remembers one, so choosing a
+    /// language on the show's page carries into every episode of it — and
+    /// choosing none stays none, which nothing else could express (Play
+    /// carries the chosen id, and "none" and "nothing chosen" are the same
+    /// absent id). See PlayerViewModel.rememberSubtitlePick for the pair.
     fun selectSubtitleTrack(track: SubtitleTrack?) {
         val current = _state.value as? DetailState.Loaded ?: return
         _state.value = current.copy(selectedSubtitleTrack = track)
+        val series = seriesId ?: return
+        val previous = prefsJob
+        prefsJob = viewModelScope.launch {
+            previous?.join()
+            runCatching {
+                prefsRepo.put(series, PREF_SUBS, rememberedSubsValue(track))
+                prefsRepo.put(itemId, PREF_SUBS_TRACK, rememberedSubsTrackValue(track))
+            }
+        }
     }
 
+    /// Remembered like a subtitle pick, in the two layers the web client
+    /// writes (HUB-33): the series remembers the LANGUAGE, which is what
+    /// carries across episodes whose track order differs, and a FILM also
+    /// pins the exact index — "the commentary track of this film" has no
+    /// language representation, and there is no series intent to follow.
+    /// Episodes deliberately don't pin, so one episode never freezes the
+    /// rest of the series on an index that meant something only in it.
     fun selectAudioTrackIndex(index: Int) {
         val current = _state.value as? DetailState.Loaded ?: return
         _state.value = current.copy(selectedAudioTrackIndex = index)
+        val series = seriesId ?: return
+        val streams = current.detail.sources.firstOrNull()?.streams?.audio ?: emptyList()
+        val previous = prefsJob
+        prefsJob = viewModelScope.launch {
+            previous?.join()
+            runCatching {
+                prefsRepo.put(series, PREF_AUDIO, rememberedAudioValue(streams.getOrNull(index), index))
+                if (current.detail.kind == "movie") {
+                    prefsRepo.put(itemId, PREF_AUDIO_TRACK, "#$index")
+                }
+            }
+        }
     }
 }

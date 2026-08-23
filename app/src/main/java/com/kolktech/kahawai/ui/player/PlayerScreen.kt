@@ -139,8 +139,9 @@ fun PlayerScreen(
     onClose: () -> Unit,
     onNextEpisode: (itemId: String, subtitleTrackId: Long?) -> Unit = { _, _ -> },
     onPreviousEpisode: (itemId: String, subtitleTrackId: Long?) -> Unit = { _, _ -> },
-    initialAudioTrack: Int = 0,
+    initialAudioTrack: Int = -1,
     initialSubtitleTrackId: Long? = null,
+    libraryId: String? = null,
 ) {
     val context = LocalContext.current
     val application = context.applicationContext as Application
@@ -148,7 +149,9 @@ fun PlayerScreen(
     val viewModel: PlayerViewModel = viewModel(
         key = itemId,
         factory = viewModelFactory {
-            initializer { PlayerViewModel(application, repo, itemId, startMs, initialAudioTrack, initialSubtitleTrackId) }
+            initializer {
+                PlayerViewModel(application, repo, itemId, startMs, initialAudioTrack, initialSubtitleTrackId, libraryId)
+            }
         },
     )
     val state by viewModel.state.collectAsState()
@@ -699,6 +702,12 @@ private fun PlayerContent(
                     .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
                 if (selection != null) params.addOverride(TrackSelectionOverride(selection.first, selection.second))
                 viewModel.player.trackSelectionParameters = params.build()
+                // Remembered for the rest of the series (HUB-33), by the
+                // language the chosen format declares — see
+                // PlayerViewModel.rememberAudioLanguage.
+                selection?.let { (group, trackIndex) ->
+                    viewModel.rememberAudioLanguage(group.getFormat(trackIndex).language)
+                }
                 true
             }
         }.show()

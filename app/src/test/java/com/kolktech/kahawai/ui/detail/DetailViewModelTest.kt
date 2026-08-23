@@ -5,6 +5,7 @@ import com.kolktech.kahawai.data.network.dto.CapabilityProfile
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.dto.TargetDuration
 import com.kolktech.kahawai.data.repository.CatalogRepository
+import com.kolktech.kahawai.data.repository.PreferencesRepository
 import com.kolktech.kahawai.playback.CapabilityProfileBuilder
 import com.kolktech.kahawai.testutil.MainDispatcherRule
 import com.kolktech.kahawai.testutil.buildTestApiService
@@ -57,7 +58,18 @@ class DetailViewModelTest {
     }
 
     private fun repo() = CatalogRepository({ buildTestApiService(server) })
-    private fun vm(itemId: String = "item1") = DetailViewModel(application, repo(), itemId)
+
+    /// No preference server here: the remembered subtitle pick is
+    /// best-effort by design (see DetailViewModel.load), and letting it fail
+    /// keeps these tests — and the enqueued response order they depend on —
+    /// about the item itself. TrackChoiceTest covers the resolution.
+    private fun vm(itemId: String = "item1") = DetailViewModel(
+        application,
+        repo(),
+        itemId,
+        libraryId = null,
+        prefsRepo = PreferencesRepository({ error("no preference server in this test") }),
+    )
 
     @Test
     fun `load succeeds for a leaf item with no children`() = runTest {

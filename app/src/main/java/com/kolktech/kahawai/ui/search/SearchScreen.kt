@@ -54,7 +54,7 @@ import com.kolktech.kahawai.ui.components.PosterCard
 @Composable
 fun SearchScreen(
     repo: CatalogRepository,
-    onOpenItem: (String) -> Unit,
+    onOpenItem: (itemId: String, libraryId: String?) -> Unit,
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
 ) {
@@ -151,7 +151,7 @@ fun SearchScreen(
                             modifier = Modifier.fillMaxSize(),
                         ) {
                             items(s.items, key = { it.id }) { item ->
-                                PosterCard(item, repo, onOpenItem)
+                                PosterCard(item, repo, { id -> onOpenItem(id, item.libraryId) })
                             }
                         }
                     }

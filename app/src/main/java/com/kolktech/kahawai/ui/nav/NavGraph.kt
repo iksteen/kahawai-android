@@ -76,12 +76,19 @@ private object Routes {
     const val SERVER_SETTINGS = "server_settings"
     const val ADMIN = "admin"
     const val LIBRARY = "library/{libraryId}?name={name}"
-    const val DETAIL = "detail/{itemId}"
-    const val PLAYER = "player/{itemId}?startMs={startMs}&audioTrack={audioTrack}&subtitleTrack={subtitleTrack}"
+    const val DETAIL = "detail/{itemId}?library={library}"
+    const val PLAYER =
+        "player/{itemId}?startMs={startMs}&audioTrack={audioTrack}&subtitleTrack={subtitleTrack}&library={library}"
     fun library(libraryId: String, name: String) = "library/$libraryId?name=${Uri.encode(name)}"
-    fun detail(itemId: String) = "detail/$itemId"
-    fun player(itemId: String, startMs: Long, audioTrack: Int, subtitleTrackId: Long?) =
-        "player/$itemId?startMs=$startMs&audioTrack=$audioTrack&subtitleTrack=${subtitleTrackId ?: -1}"
+    /// [libraryId] is navigation context, carried the way the web client
+    /// carries it in the URL: an item's own detail response doesn't name a
+    /// library, and its media type is what the account's track preferences
+    /// are keyed by (see TrackChoice). Empty when the row it was opened
+    /// from didn't name one either.
+    fun detail(itemId: String, libraryId: String?) = "detail/$itemId?library=${libraryId.orEmpty()}"
+    fun player(itemId: String, startMs: Long, audioTrack: Int, subtitleTrackId: Long?, libraryId: String?) =
+        "player/$itemId?startMs=$startMs&audioTrack=$audioTrack&subtitleTrack=${subtitleTrackId ?: -1}" +
+            "&library=${libraryId.orEmpty()}"
 }
 
 @Composable
@@ -225,7 +232,7 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
         composable(Routes.HOME) {
             HomeScreen(
                 repo = catalogRepository,
-                onOpenItem = { itemId -> navController.navigate(Routes.detail(itemId)) },
+                onOpenItem = { itemId, libraryId -> navController.navigate(Routes.detail(itemId, libraryId)) },
                 onOpenLibrary = { id, name -> navController.navigate(Routes.library(id, name)) },
                 onSearch = { navController.navigate(Routes.SEARCH) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
@@ -304,7 +311,7 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
         composable(Routes.SEARCH) {
             SearchScreen(
                 repo = catalogRepository,
-                onOpenItem = { itemId -> navController.navigate(Routes.detail(itemId)) },
+                onOpenItem = { itemId, libraryId -> navController.navigate(Routes.detail(itemId, libraryId)) },
                 onBack = { navController.popBackStack() },
                 onSessionExpired = onSessionExpired,
             )
@@ -322,22 +329,27 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
                 libraryId = libraryId,
                 libraryName = name,
                 repo = catalogRepository,
-                onOpenItem = { itemId -> navController.navigate(Routes.detail(itemId)) },
+                onOpenItem = { itemId, libraryId -> navController.navigate(Routes.detail(itemId, libraryId)) },
                 onBack = { navController.popBackStack() },
                 onSessionExpired = onSessionExpired,
             )
         }
         composable(
             Routes.DETAIL,
-            arguments = listOf(navArgument("itemId") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("itemId") { type = NavType.StringType },
+                navArgument("library") { type = NavType.StringType; defaultValue = "" },
+            ),
         ) { backStackEntry ->
             val itemId = backStackEntry.arguments?.getString("itemId") ?: return@composable
+            val libraryId = backStackEntry.arguments?.getString("library")?.takeIf { it.isNotEmpty() }
             DetailScreen(
                 itemId = itemId,
+                libraryId = libraryId,
                 repo = catalogRepository,
-                onOpenItem = { childId -> navController.navigate(Routes.detail(childId)) },
+                onOpenItem = { childId, childLibraryId -> navController.navigate(Routes.detail(childId, childLibraryId)) },
                 onPlay = { playId, startMs, audioTrack, subtitleTrackId ->
-                    navController.navigate(Routes.player(playId, startMs, audioTrack, subtitleTrackId))
+                    navController.navigate(Routes.player(playId, startMs, audioTrack, subtitleTrackId, libraryId))
                 },
                 onBack = { navController.popBackStack() },
                 onSessionExpired = onSessionExpired,
@@ -348,20 +360,25 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
             arguments = listOf(
                 navArgument("itemId") { type = NavType.StringType },
                 navArgument("startMs") { type = NavType.LongType; defaultValue = 0L },
-                navArgument("audioTrack") { type = NavType.IntType; defaultValue = 0 },
+                navArgument("audioTrack") { type = NavType.IntType; defaultValue = -1 },
                 navArgument("subtitleTrack") { type = NavType.LongType; defaultValue = -1L },
+                navArgument("library") { type = NavType.StringType; defaultValue = "" },
             ),
         ) { backStackEntry ->
             val itemId = backStackEntry.arguments?.getString("itemId") ?: return@composable
             val startMs = backStackEntry.arguments?.getLong("startMs") ?: 0L
-            val audioTrack = backStackEntry.arguments?.getInt("audioTrack") ?: 0
+            val audioTrack = backStackEntry.arguments?.getInt("audioTrack") ?: -1
             val subtitleTrack = backStackEntry.arguments?.getLong("subtitleTrack") ?: -1L
+            // An episode is in the same library as the one that opened it,
+            // so this rides the whole way through a binge (see Routes.detail).
+            val libraryId = backStackEntry.arguments?.getString("library")?.takeIf { it.isNotEmpty() }
             PlayerScreen(
                 itemId = itemId,
                 startMs = startMs,
                 appSettingsStore = app.appSettingsStore,
                 initialAudioTrack = audioTrack,
                 initialSubtitleTrackId = subtitleTrack.takeIf { it >= 0 },
+                libraryId = libraryId,
                 onClose = { navController.popBackStack() },
                 // Replaces both the current (just-finished) player entry
                 // AND its episode's detail entry with the NEXT episode's
@@ -372,18 +389,18 @@ fun KahawaiNavGraph(app: KahawaiApp, modifier: Modifier = Modifier) {
                 // walking back through every previously-watched episode's
                 // leftover detail entry.
                 onNextEpisode = { nextItemId, nextSubtitleTrackId ->
-                    navController.navigate(Routes.detail(nextItemId)) {
+                    navController.navigate(Routes.detail(nextItemId, libraryId)) {
                         popUpTo(Routes.DETAIL) { inclusive = true }
                     }
-                    navController.navigate(Routes.player(nextItemId, 0L, 0, nextSubtitleTrackId))
+                    navController.navigate(Routes.player(nextItemId, 0L, -1, nextSubtitleTrackId, libraryId))
                 },
                 // Same back-stack rewrite as onNextEpisode, for the "<"
                 // button jumping to the previous episode instead.
                 onPreviousEpisode = { previousItemId, previousSubtitleTrackId ->
-                    navController.navigate(Routes.detail(previousItemId)) {
+                    navController.navigate(Routes.detail(previousItemId, libraryId)) {
                         popUpTo(Routes.DETAIL) { inclusive = true }
                     }
-                    navController.navigate(Routes.player(previousItemId, 0L, 0, previousSubtitleTrackId))
+                    navController.navigate(Routes.player(previousItemId, 0L, -1, previousSubtitleTrackId, libraryId))
                 },
             )
         }

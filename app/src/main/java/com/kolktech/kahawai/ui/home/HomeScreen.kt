@@ -69,7 +69,7 @@ private val GRID_SPACING = 10.dp
 @Composable
 fun HomeScreen(
     repo: CatalogRepository,
-    onOpenItem: (String) -> Unit,
+    onOpenItem: (itemId: String, libraryId: String?) -> Unit,
     onOpenLibrary: (id: String, name: String) -> Unit,
     onSearch: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -325,7 +325,7 @@ private fun ContinueWatchingGridRow(
     chunk: List<Item>,
     columns: Int,
     repo: CatalogRepository,
-    onOpenItem: (String) -> Unit,
+    onOpenItem: (itemId: String, libraryId: String?) -> Unit,
     firstItemFocusRequester: FocusRequester? = null,
 ) {
     Row(
@@ -336,7 +336,7 @@ private fun ContinueWatchingGridRow(
             ContinueWatchingCard(
                 item,
                 repo,
-                onOpenItem,
+                { id -> onOpenItem(id, item.libraryId) },
                 modifier = Modifier.weight(1f),
                 focusRequester = if (index == 0) firstItemFocusRequester else null,
             )
@@ -352,7 +352,7 @@ private fun PosterGridRow(
     chunk: List<Item>,
     columns: Int,
     repo: CatalogRepository,
-    onOpenItem: (String) -> Unit,
+    onOpenItem: (itemId: String, libraryId: String?) -> Unit,
     firstItemFocusRequester: FocusRequester? = null,
 ) {
     Row(
@@ -363,7 +363,7 @@ private fun PosterGridRow(
             PosterCard(
                 item,
                 repo,
-                onOpenItem,
+                { id -> onOpenItem(id, item.libraryId) },
                 modifier = Modifier.weight(1f),
                 focusRequester = if (index == 0) firstItemFocusRequester else null,
             )
