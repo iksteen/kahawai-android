@@ -39,12 +39,18 @@ class ServerSettingsViewModelTest {
         server.shutdown()
     }
 
+    /// Every test that reaches [ServerSettingsState.Loaded] needs two
+    /// enqueued responses: `load()` fetches prefs, then the OpenSubtitles
+    /// account's `configured` flag (kahawai commit 7835630).
+    private fun enqueueLoad(prefsBody: String = """{"prefs":[]}""", configured: Boolean = false) {
+        server.enqueue(MockResponse().setBody(prefsBody))
+        server.enqueue(MockResponse().setBody("""{"configured":$configured}"""))
+    }
+
     @Test
     fun `load succeeds and keeps only global-scope prefs`() = runTest {
-        server.enqueue(
-            MockResponse().setBody(
-                """{"prefs":[{"scope":"","key":"a","value":"1"},{"scope":"lib1","key":"b","value":"2"}]}""",
-            ),
+        enqueueLoad(
+            prefsBody = """{"prefs":[{"scope":"","key":"a","value":"1"},{"scope":"lib1","key":"b","value":"2"}]}""",
         )
 
         val viewModel = ServerSettingsViewModel()
@@ -54,6 +60,21 @@ class ServerSettingsViewModelTest {
             if (item is ServerSettingsState.Loading) item = awaitItem()
             val loaded = item as ServerSettingsState.Loaded
             assertEquals(mapOf("a" to "1"), loaded.values)
+            assertFalse(loaded.openSubtitlesConfigured)
+        }
+    }
+
+    @Test
+    fun `load reflects an attached OpenSubtitles account`() = runTest {
+        enqueueLoad(configured = true)
+
+        val viewModel = ServerSettingsViewModel()
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is ServerSettingsState.Loading) item = awaitItem()
+            val loaded = item as ServerSettingsState.Loaded
+            assertTrue(loaded.openSubtitlesConfigured)
         }
     }
 
@@ -86,8 +107,22 @@ class ServerSettingsViewModelTest {
     }
 
     @Test
-    fun `setPref success updates the value optimistically and invokes onSaved`() = runTest {
+    fun `load failure when the OpenSubtitles account check fails surfaces an error`() = runTest {
         server.enqueue(MockResponse().setBody("""{"prefs":[]}"""))
+        server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
+
+        val viewModel = ServerSettingsViewModel()
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is ServerSettingsState.Loading) item = awaitItem()
+            assertTrue(item is ServerSettingsState.Error)
+        }
+    }
+
+    @Test
+    fun `setPref success updates the value optimistically and invokes onSaved`() = runTest {
+        enqueueLoad()
         val viewModel = ServerSettingsViewModel()
 
         viewModel.state.test {
@@ -107,7 +142,7 @@ class ServerSettingsViewModelTest {
 
     @Test
     fun `setPref with an empty value removes the key from state`() = runTest {
-        server.enqueue(MockResponse().setBody("""{"prefs":[{"scope":"","key":"k","value":"v"}]}"""))
+        enqueueLoad(prefsBody = """{"prefs":[{"scope":"","key":"k","value":"v"}]}""")
         val viewModel = ServerSettingsViewModel()
 
         viewModel.state.test {
@@ -125,8 +160,26 @@ class ServerSettingsViewModelTest {
     }
 
     @Test
+    fun `setPref preserves the OpenSubtitles configured flag`() = runTest {
+        enqueueLoad(configured = true)
+        val viewModel = ServerSettingsViewModel()
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is ServerSettingsState.Loading) item = awaitItem()
+            assertTrue((item as ServerSettingsState.Loaded).openSubtitlesConfigured)
+
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            viewModel.setPref("k", "v")
+
+            val next = awaitItem() as ServerSettingsState.Loaded
+            assertTrue(next.openSubtitlesConfigured)
+        }
+    }
+
+    @Test
     fun `setPref failure surfaces an error state and does not call onSaved`() = runTest {
-        server.enqueue(MockResponse().setBody("""{"prefs":[]}"""))
+        enqueueLoad()
         val viewModel = ServerSettingsViewModel()
 
         viewModel.state.test {
@@ -145,54 +198,28 @@ class ServerSettingsViewModelTest {
     }
 
     @Test
-    fun `saveOpenSubtitles success sets both keys and invokes onSaved`() = runTest {
-        server.enqueue(MockResponse().setBody("""{"prefs":[]}"""))
+    fun `saveOpenSubtitles success marks the account configured and invokes onSaved`() = runTest {
+        enqueueLoad()
         val viewModel = ServerSettingsViewModel()
 
         viewModel.state.test {
             var item = awaitItem()
             if (item is ServerSettingsState.Loading) item = awaitItem()
-            assertTrue(item is ServerSettingsState.Loaded)
+            assertFalse((item as ServerSettingsState.Loaded).openSubtitlesConfigured)
 
-            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
             server.enqueue(MockResponse().setBody("""{"ok":true}"""))
             var saved = false
             viewModel.saveOpenSubtitles("user", "pass") { saved = true }
 
             val next = awaitItem() as ServerSettingsState.Loaded
-            assertEquals("user", next.values["opensubtitles.username"])
-            assertEquals("pass", next.values["opensubtitles.password"])
+            assertTrue(next.openSubtitlesConfigured)
             assertTrue(saved)
         }
     }
 
     @Test
-    fun `saveOpenSubtitles with blank username or password removes that key instead of setting it`() = runTest {
-        server.enqueue(
-            MockResponse().setBody(
-                """{"prefs":[{"scope":"","key":"opensubtitles.username","value":"olduser"},{"scope":"","key":"opensubtitles.password","value":"oldpass"}]}""",
-            ),
-        )
-        val viewModel = ServerSettingsViewModel()
-
-        viewModel.state.test {
-            var item = awaitItem()
-            if (item is ServerSettingsState.Loading) item = awaitItem()
-            assertTrue(item is ServerSettingsState.Loaded)
-
-            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
-            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
-            viewModel.saveOpenSubtitles("", "")
-
-            val next = awaitItem() as ServerSettingsState.Loaded
-            assertFalse(next.values.containsKey("opensubtitles.username"))
-            assertFalse(next.values.containsKey("opensubtitles.password"))
-        }
-    }
-
-    @Test
     fun `saveOpenSubtitles failure surfaces an error state`() = runTest {
-        server.enqueue(MockResponse().setBody("""{"prefs":[]}"""))
+        enqueueLoad()
         val viewModel = ServerSettingsViewModel()
 
         viewModel.state.test {
@@ -202,6 +229,44 @@ class ServerSettingsViewModelTest {
 
             server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
             viewModel.saveOpenSubtitles("user", "pass")
+
+            val next = awaitItem()
+            assertTrue(next is ServerSettingsState.Error)
+        }
+    }
+
+    @Test
+    fun `disconnectOpenSubtitles clears the configured flag and invokes onSaved`() = runTest {
+        enqueueLoad(configured = true)
+        val viewModel = ServerSettingsViewModel()
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is ServerSettingsState.Loading) item = awaitItem()
+            assertTrue((item as ServerSettingsState.Loaded).openSubtitlesConfigured)
+
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            var saved = false
+            viewModel.disconnectOpenSubtitles { saved = true }
+
+            val next = awaitItem() as ServerSettingsState.Loaded
+            assertFalse(next.openSubtitlesConfigured)
+            assertTrue(saved)
+        }
+    }
+
+    @Test
+    fun `disconnectOpenSubtitles failure surfaces an error state`() = runTest {
+        enqueueLoad(configured = true)
+        val viewModel = ServerSettingsViewModel()
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is ServerSettingsState.Loading) item = awaitItem()
+            assertTrue(item is ServerSettingsState.Loaded)
+
+            server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
+            viewModel.disconnectOpenSubtitles()
 
             val next = awaitItem()
             assertTrue(next is ServerSettingsState.Error)

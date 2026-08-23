@@ -151,7 +151,7 @@
     <string name="server_settings_title">Server settings</string>
     <string name="server_settings_opensubtitles">OpenSubtitles</string>
     <string name="server_settings_opensubtitles_desc">Attach your own opensubtitles.com account to use your own download budget instead of the shared one.</string>
-    <string name="settings_password_saved">Password (saved — enter to replace)</string>
+    <string name="server_settings_opensubtitles_configured_hint">account configured — enter to replace</string>
     <string name="server_settings_playback">Playback</string>
     <string name="server_settings_bandwidth">Bandwidth cap (kbit/s, blank = none)</string>
     <string name="server_settings_ass_fallback_desc">Styled subtitle fallback — first rung this client and fleet can serve wins</string>

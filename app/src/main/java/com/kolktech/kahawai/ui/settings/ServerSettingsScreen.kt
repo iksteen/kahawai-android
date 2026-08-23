@@ -88,16 +88,17 @@ fun ServerSettingsScreen(
                     onRetry = { viewModel.load() },
                     onSignInAgain = onSessionExpired,
                 )
-                is ServerSettingsState.Loaded -> LoadedContent(s.values, viewModel)
+                is ServerSettingsState.Loaded -> LoadedContent(s, viewModel)
             }
         }
     }
 }
 
 @Composable
-private fun LoadedContent(values: Map<String, String>, viewModel: ServerSettingsViewModel) {
+private fun LoadedContent(state: ServerSettingsState.Loaded, viewModel: ServerSettingsViewModel) {
+    val values = state.values
     LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
-        item { OpenSubtitlesSection(values, viewModel) }
+        item { OpenSubtitlesSection(state.openSubtitlesConfigured, viewModel) }
         item { PlaybackSection(values, viewModel) }
         items(MEDIA_TYPES) { mediaType -> MediaTypeSection(mediaType, values, viewModel) }
         item { Spacer(Modifier.padding(bottom = 24.dp)) }
@@ -113,13 +114,14 @@ private fun SectionTitle(text: String) {
     )
 }
 
+/// The hub's credential store never reads the account back out (commit
+/// 7835630), so unlike every other field on this screen these two boxes
+/// start empty on every visit — `configured` is the only state the server
+/// gives us, and it says an account is there, not which.
 @Composable
-private fun OpenSubtitlesSection(values: Map<String, String>, viewModel: ServerSettingsViewModel) {
-    var username by remember(values["opensubtitles.username"]) {
-        mutableStateOf(values["opensubtitles.username"].orEmpty())
-    }
+private fun OpenSubtitlesSection(configured: Boolean, viewModel: ServerSettingsViewModel) {
+    var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    val hasPassword = values.containsKey("opensubtitles.password")
 
     SectionTitle(stringResource(R.string.server_settings_opensubtitles))
     Text(
@@ -131,24 +133,32 @@ private fun OpenSubtitlesSection(values: Map<String, String>, viewModel: ServerS
         value = username,
         onValueChange = { username = it },
         label = { Text(stringResource(R.string.username)) },
+        placeholder = {
+            if (configured) Text(stringResource(R.string.server_settings_opensubtitles_configured_hint))
+        },
         singleLine = true,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
     )
     OutlinedTextField(
         value = password,
         onValueChange = { password = it },
-        label = { Text(stringResource(if (hasPassword) R.string.settings_password_saved else R.string.password)) },
+        label = { Text(stringResource(R.string.password)) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
     )
     Row(modifier = Modifier.padding(top = 8.dp)) {
         Button(
-            onClick = { viewModel.saveOpenSubtitles(username.trim(), password.trim()) { password = "" } },
+            onClick = {
+                viewModel.saveOpenSubtitles(username.trim(), password.trim()) {
+                    username = ""
+                    password = ""
+                }
+            },
             enabled = username.isNotBlank() && password.isNotBlank(),
         ) { Text(stringResource(R.string.save)) }
-        if (username.isNotEmpty() || hasPassword) {
+        if (configured) {
             OutlinedButton(
-                onClick = { username = ""; viewModel.saveOpenSubtitles("", "") },
+                onClick = { viewModel.disconnectOpenSubtitles() },
                 modifier = Modifier.padding(start = 8.dp),
             ) { Text(stringResource(R.string.disconnect)) }
         }
