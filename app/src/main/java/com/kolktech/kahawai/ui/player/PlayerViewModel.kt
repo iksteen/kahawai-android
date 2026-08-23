@@ -85,6 +85,10 @@ data class SubtitleSession(
 /// every 10s while playing, plus on pause and on teardown.
 private const val PROGRESS_INTERVAL_MS = 10_000L
 
+/// How long onBackgrounded() waits before actually stopping the player —
+/// see its doc for why this is debounced rather than immediate.
+private const val BACKGROUND_STOP_DELAY_MS = 500L
+
 private const val TAG = "PlayerViewModel"
 
 /// Where to start the player and how to interpret [PlayerViewModel]'s
@@ -263,9 +267,16 @@ class PlayerViewModel(
     /// the center pause glyph doesn't flash up over the buffering spinner
     /// or a just-finished/not-yet-started playback. Recomputed off both
     /// onIsPlayingChanged and onPlaybackStateChanged (see the listener in
-    /// init) since either alone can flip it.
+    /// init) since either alone can flip it. Also excludes [internalPause]:
+    /// handleSeek()'s hub-restart round trip and restartSessionWithSubtitle()
+    /// both pause() the player while they wait on a network call the user
+    /// never asked to see — a segment auto-skip or "Skip Intro"/"Skip
+    /// Recap"/"Skip Credits" press would otherwise flash the pause glyph
+    /// for the round trip's duration even though playback never stopped
+    /// from the user's perspective.
     private val _isPaused = MutableStateFlow(false)
     val isPaused: StateFlow<Boolean> = _isPaused
+    private var internalPause = false
 
     /// Failures that DON'T end the session — a failed seek or subtitle
     /// switch leaves the current stream playable, so they surface as a
@@ -763,7 +774,7 @@ class PlayerViewModel(
     }
 
     private fun updatePausedState() {
-        _isPaused.value = !realPlayer.playWhenReady && realPlayer.playbackState == Player.STATE_READY
+        _isPaused.value = !internalPause && !realPlayer.playWhenReady && realPlayer.playbackState == Player.STATE_READY
     }
 
     /// Called when the activity is genuinely backgrounded (Home, recents —
@@ -781,13 +792,30 @@ class PlayerViewModel(
     /// playbackState to STATE_IDLE, which makes ExoPlayer abandon audio
     /// focus for good, while leaving the MediaItem and position intact —
     /// onForegrounded() only needs to prepare() again.
+    ///
+    /// The actual stop() is delayed by [BACKGROUND_STOP_DELAY_MS] rather
+    /// than run immediately: some TV boxes/launchers flash a system
+    /// overlay over the app for a frame or two (e.g. right as playback
+    /// starts), which fires a real ON_STOP/ON_START pair even though the
+    /// user never left. Paying the stop()+prepare() re-buffer for that is
+    /// pure regression — a visibly snappier start turns into two loading
+    /// spinners back to back. If onForegrounded() arrives before the delay
+    /// elapses, [backgroundJob] is cancelled and playback was never
+    /// actually stopped, so there's nothing to re-buffer. A genuine
+    /// backgrounding (the user actually leaving) comfortably outlasts this
+    /// short window, so the audio-focus fix above still applies.
     private var backgrounded = false
+    private var backgroundJob: Job? = null
 
     fun onBackgrounded() {
         if (realPlayer.playbackState == Player.STATE_IDLE) return
-        backgrounded = true
-        realPlayer.playWhenReady = false
-        realPlayer.stop()
+        backgroundJob?.cancel()
+        backgroundJob = viewModelScope.launch {
+            delay(BACKGROUND_STOP_DELAY_MS)
+            backgrounded = true
+            realPlayer.playWhenReady = false
+            realPlayer.stop()
+        }
     }
 
     /// Mirrors onBackgrounded(): re-buffers at the position stop() left
@@ -803,6 +831,8 @@ class PlayerViewModel(
     /// STATE_ENDED and triggers handlePlaybackEnded() before playback ever
     /// starts (auto-advancing episodes in a rapid loop).
     fun onForegrounded() {
+        backgroundJob?.cancel()
+        backgroundJob = null
         if (backgrounded) {
             backgrounded = false
             realPlayer.prepare()
@@ -886,6 +916,7 @@ class PlayerViewModel(
         seekJob = viewModelScope.launch {
             previousSeek?.cancelAndJoin()
             try {
+                internalPause = true
                 realPlayer.pause()
                 // No subtitle_track on seeks (mirrors the web client):
                 // the hub's session already remembers an active burn
@@ -912,12 +943,14 @@ class PlayerViewModel(
                 offsetMs = targetMs
                 Log.d(TAG, "seek accepted by hub item=$itemId newPartBaseMs=${result.partBaseMs}")
                 attach(session, startPositionMs = 0, requestedAbsMs = targetMs)
+                internalPause = false
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // The old stream is untouched (we only paused) — resume it
                 // where it was and let the user retry the seek.
                 Log.w(TAG, "seek failed item=$itemId targetMs=$targetMs", e)
+                internalPause = false
                 realPlayer.play()
                 _transientError.value = getApplication<Application>().getString(R.string.player_seek_failed, e.readableMessage())
             }
@@ -962,6 +995,7 @@ class PlayerViewModel(
     private fun restartSessionWithSubtitle(subtitleTrackId: Long?, revertTo: SubtitleTrack?) {
         viewModelScope.launch {
             try {
+                internalPause = true
                 realPlayer.pause()
                 val positionMs = offsetMs + realPlayer.currentPosition
                 val profile = CapabilityProfileBuilder.build(getApplication())
@@ -982,6 +1016,7 @@ class PlayerViewModel(
                 val plan = resumePlan(newSession.mode, positionMs)
                 offsetMs = plan.offsetMs
                 attach(newSession, startPositionMs = plan.startPositionMs, requestedAbsMs = positionMs)
+                internalPause = false
                 if (oldSessionId != null && oldSessionId != newSession.sessionId) {
                     launch {
                         try {
@@ -996,6 +1031,7 @@ class PlayerViewModel(
                 // valid — resume it and roll the picker back to the
                 // selection that's actually playing.
                 _selectedSubtitleTrack.value = revertTo
+                internalPause = false
                 realPlayer.play()
                 _transientError.value = getApplication<Application>().getString(R.string.player_subtitle_switch_failed, e.readableMessage())
             }
