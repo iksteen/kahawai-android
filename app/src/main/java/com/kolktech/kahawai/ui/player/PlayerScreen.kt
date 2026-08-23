@@ -27,6 +27,7 @@ import android.widget.TextView
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -52,11 +54,13 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -419,6 +423,47 @@ private fun PlayerContent(
             .build()
     }
 
+    // HUB-37. The ViewModel exposes segments as a StateFlow (set once,
+    // at session start), but "which segment is the playhead inside" is a
+    // function of TIME, which nothing here otherwise polls — position is
+    // read straight off the player imperatively everywhere else in this
+    // file (gesture indicators, PiP aspect ratio). A short interval only
+    // runs while there's something to skip, matching the web client's
+    // Vue `computed` off `playing.posMs`, which only re-evaluates because
+    // the video element already fires timeupdate constantly.
+    // Computed up here (ahead of PlayerView's controller-visibility key
+    // handling below) so the OK-key handler can check it: the skip
+    // button, when it's up, must win the OK/enter press over the normal
+    // play/pause toggle.
+    var skipCheckPosMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(segments) {
+        if (segments.isEmpty()) return@LaunchedEffect
+        while (true) {
+            skipCheckPosMs = viewModel.player.currentPosition
+            delay(300)
+        }
+    }
+    val skippingSegment = remember(segments, skipCheckPosMs) { skippableSegment(segments, skipCheckPosMs) }
+
+    // Auto-skip fires once per segment (tracked by its start), not on
+    // every 300ms tick that still finds the playhead inside it — the
+    // hub seek that follows is an async round trip through the same
+    // handleSeek() path a manual Skip press uses, and re-issuing it every
+    // tick would just queue redundant hub round trips.
+    var autoSkippedStartMs by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(skippingSegment, autoSkipEnabled) {
+        val segment = skippingSegment
+        if (autoSkipEnabled && segment != null && segment.startMs != autoSkippedStartMs) {
+            autoSkippedStartMs = segment.startMs
+            viewModel.player.seekTo(skipTargetMs(segment, viewModel.player.duration))
+        }
+    }
+
+    // Mirrors the render condition below (the Skip button itself): true
+    // exactly when that button is on screen and able to take the OK key.
+    val skipButtonVisible = !isInPip && !autoSkipEnabled && skippingSegment != null && skipLabelRes(skippingSegment) != null
+    val skipButtonVisibleState = rememberUpdatedState(skipButtonVisible)
+
     // Remote keys, routed straight from the activity (see
     // MainActivity.onPlayerKey). PlayerView already knows what to do with
     // transport keys and with a D-pad press while the controls are
@@ -445,8 +490,12 @@ private fun PlayerContent(
                     // OK/enter with the controls hidden toggles play/pause
                     // in place instead of surfacing them - once the
                     // controls are up, OK reaches the (focused) play/pause
-                    // button itself and this branch is skipped.
-                    event.keyCode in OK_KEYS && !view.isControllerFullyVisible -> {
+                    // button itself and this branch is skipped. Same deal
+                    // when the Skip button is up: it already holds D-pad
+                    // focus (see skipButtonFocusRequester below), so OK
+                    // must fall through to normal dispatch and land on it
+                    // instead of pausing underneath it.
+                    event.keyCode in OK_KEYS && !view.isControllerFullyVisible && !skipButtonVisibleState.value -> {
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             if (viewModel.player.isPlaying) viewModel.player.pause() else viewModel.player.play()
                         }
@@ -552,38 +601,6 @@ private fun PlayerContent(
     // than threading the one PlayerScreen built for the ViewModel) keeps
     // this composable self-contained.
     val subtitleRepo = remember { PlaybackRepository() }
-
-    // HUB-37. The ViewModel exposes segments as a StateFlow (set once,
-    // at session start), but "which segment is the playhead inside" is a
-    // function of TIME, which nothing here otherwise polls — position is
-    // read straight off the player imperatively everywhere else in this
-    // file (gesture indicators, PiP aspect ratio). A short interval only
-    // runs while there's something to skip, matching the web client's
-    // Vue `computed` off `playing.posMs`, which only re-evaluates because
-    // the video element already fires timeupdate constantly.
-    var skipCheckPosMs by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(segments) {
-        if (segments.isEmpty()) return@LaunchedEffect
-        while (true) {
-            skipCheckPosMs = viewModel.player.currentPosition
-            delay(300)
-        }
-    }
-    val skippingSegment = remember(segments, skipCheckPosMs) { skippableSegment(segments, skipCheckPosMs) }
-
-    // Auto-skip fires once per segment (tracked by its start), not on
-    // every 300ms tick that still finds the playhead inside it — the
-    // hub seek that follows is an async round trip through the same
-    // handleSeek() path a manual Skip press uses, and re-issuing it every
-    // tick would just queue redundant hub round trips.
-    var autoSkippedStartMs by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(skippingSegment, autoSkipEnabled) {
-        val segment = skippingSegment
-        if (autoSkipEnabled && segment != null && segment.startMs != autoSkippedStartMs) {
-            autoSkippedStartMs = segment.startMs
-            viewModel.player.seekTo(skipTargetMs(segment, viewModel.player.duration))
-        }
-    }
 
     // HUB-37: chapter marks on the native styled progress bar. Media3
     // swaps the layout's exo_progress_placeholder for a real
@@ -1172,11 +1189,15 @@ private fun PlayerContent(
         // fired the seek, and a button that would show for a stray 300ms
         // frame before the seek lands is just a flicker, not an offer.
         val skipLabelResId = skipLabelRes(skippingSegment)
-        if (!isInPip && !autoSkipEnabled && skippingSegment != null && skipLabelResId != null) {
+        if (skipButtonVisible && skipLabelResId != null) {
             // Grabbing focus is only useful with a d-pad: on TV there's no
             // pointer to click the button with, so unless it's focused a
             // d-pad press has nothing to act on and the offer is dead.
+            // The OK-key handler above defers to this focus too, so the
+            // button — not play/pause — is always what an OK press hits
+            // while it's up.
             val skipButtonFocusRequester = remember { FocusRequester() }
+            var skipButtonFocused by remember { mutableStateOf(false) }
             if (isTv) {
                 LaunchedEffect(Unit) { skipButtonFocusRequester.requestFocus() }
             }
@@ -1188,7 +1209,13 @@ private fun PlayerContent(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = 96.dp)
-                    .focusRequester(skipButtonFocusRequester),
+                    .focusRequester(skipButtonFocusRequester)
+                    .onFocusChanged { skipButtonFocused = it.isFocused }
+                    .border(
+                        width = if (skipButtonFocused) 3.dp else 0.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                        shape = ButtonDefaults.shape,
+                    ),
             ) {
                 Text(stringResource(skipLabelResId))
             }
