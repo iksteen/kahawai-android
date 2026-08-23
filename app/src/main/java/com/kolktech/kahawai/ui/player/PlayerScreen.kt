@@ -308,6 +308,12 @@ private const val SEEK_CHAIN_WINDOW_MS = 800L
 /// lone press only toggles the controls.
 private const val TV_BACK_EXIT_WINDOW_MS = 1_000L
 
+/// PlayerView's own default auto-hide delay, restored once playback
+/// resumes (see the isPaused effect in PlayerContent) — 0 disables the
+/// timeout entirely, which is what keeps the controls up indefinitely
+/// while genuinely paused.
+private const val DEFAULT_CONTROLLER_SHOW_TIMEOUT_MS = 5_000
+
 @Composable
 private fun PlayerContent(
     viewModel: PlayerViewModel,
@@ -496,13 +502,16 @@ private fun PlayerContent(
                         true
                     }
                     // OK/enter with the controls hidden toggles play/pause
-                    // in place instead of surfacing them - once the
-                    // controls are up, OK reaches the (focused) play/pause
-                    // button itself and this branch is skipped. Same deal
-                    // when the Skip button is up: it already holds D-pad
-                    // focus (see skipButtonFocusRequester below), so OK
-                    // must fall through to normal dispatch and land on it
-                    // instead of pausing underneath it.
+                    // in place - once the controls are up, OK reaches the
+                    // (focused) play/pause button itself and this branch
+                    // is skipped. A resulting pause surfaces the controls
+                    // anyway (see the isPaused effect below, which reacts
+                    // to the player state this produces rather than being
+                    // told to show them here). Same deal when the Skip
+                    // button is up: it already holds D-pad focus (see
+                    // skipButtonFocusRequester below), so OK must fall
+                    // through to normal dispatch and land on it instead of
+                    // pausing underneath it.
                     event.keyCode in OK_KEYS && !view.isControllerFullyVisible && !skipButtonVisibleState.value -> {
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             if (viewModel.player.isPlaying) viewModel.player.pause() else viewModel.player.play()
@@ -1022,13 +1031,21 @@ private fun PlayerContent(
                     // A d-pad press while the controls are hidden is
                     // swallowed by PlayerView just to show them, without
                     // moving focus - so the bar takes two presses to
-                    // reach. Land focus on it (the play button, first
-                    // focusable in kw_player_control_view) as soon as it
-                    // appears, whichever path showed it. No-op in touch
-                    // mode, where none of these buttons take focus.
+                    // reach. Land focus on the play/pause button
+                    // specifically (not a bare requestFocus() on the
+                    // container, which resolves to whatever's first in
+                    // kw_player_control_view's focus order - kw_prev
+                    // ahead of exo_play_pause - the moment a previous
+                    // episode makes that button visible) as soon as the
+                    // controls appear, whichever path showed them. No-op
+                    // in touch mode, where none of these buttons take
+                    // focus.
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
-                            if (visibility == View.VISIBLE) requestFocus()
+                            if (visibility == View.VISIBLE) {
+                                findViewById<ImageButton>(androidx.media3.ui.R.id.exo_play_pause)?.requestFocus()
+                                    ?: requestFocus()
+                            }
                         },
                     )
                     resizeMode = RESIZE_MODES[resizeModeIndex].first
@@ -1146,6 +1163,31 @@ private fun PlayerContent(
         // the onPlayerKey branch above). Excluded from PiP, whose tiny
         // window has no room for anything but the video itself.
         val isPaused by viewModel.isPaused.collectAsState()
+
+        // Controls follow pause state directly rather than their own
+        // timeout while paused: up (and staying up - no auto-hide) the
+        // moment playback is genuinely paused, whether that came from the
+        // focused play/pause button or an OK press while they were
+        // hidden (see the onPlayerKey OK branch above); hidden again the
+        // moment playback resumes, instead of lingering for the normal
+        // timeout. isPaused already excludes the internal pause/resume
+        // blips a segment auto-skip or subtitle restart make (see
+        // PlayerViewModel's internalPause), so this never fires for
+        // those. Skipped in PiP, whose tiny window has no controls to
+        // manage. showController() alone lands focus on exo_play_pause
+        // (see the ControllerVisibilityListener set up on this PlayerView
+        // above) - no separate focus call needed here.
+        LaunchedEffect(isPaused, isInPip, playerView) {
+            val view = playerView ?: return@LaunchedEffect
+            if (isPaused && !isInPip) {
+                view.controllerShowTimeoutMs = 0
+                view.showController()
+            } else {
+                view.controllerShowTimeoutMs = DEFAULT_CONTROLLER_SHOW_TIMEOUT_MS
+                view.hideController()
+            }
+        }
+
         if (isPaused && !isInPip) {
             Box(
                 modifier = Modifier
