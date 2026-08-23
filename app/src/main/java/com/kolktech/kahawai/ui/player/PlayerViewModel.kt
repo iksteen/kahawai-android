@@ -781,8 +781,11 @@ class PlayerViewModel(
     /// playbackState to STATE_IDLE, which makes ExoPlayer abandon audio
     /// focus for good, while leaving the MediaItem and position intact —
     /// onForegrounded() only needs to prepare() again.
+    private var backgrounded = false
+
     fun onBackgrounded() {
         if (realPlayer.playbackState == Player.STATE_IDLE) return
+        backgrounded = true
         realPlayer.playWhenReady = false
         realPlayer.stop()
     }
@@ -790,9 +793,20 @@ class PlayerViewModel(
     /// Mirrors onBackgrounded(): re-buffers at the position stop() left
     /// behind. playWhenReady is already false from onBackgrounded(), so
     /// this brings the player back to a paused, ready-to-resume state
-    /// rather than auto-playing.
+    /// rather than auto-playing. Gated on [backgrounded] rather than a
+    /// bare STATE_IDLE check: lifecycle's addObserver() replays a
+    /// synthetic ON_START the instant PlayerScreen's observer registers
+    /// (Activity is already STARTED by then), which fires before attach()
+    /// has ever set a MediaItem — realPlayer is still its fresh,
+    /// just-built STATE_IDLE at that point too. Without this gate that
+    /// prepare()s an empty playlist, which ExoPlayer resolves straight to
+    /// STATE_ENDED and triggers handlePlaybackEnded() before playback ever
+    /// starts (auto-advancing episodes in a rapid loop).
     fun onForegrounded() {
-        if (realPlayer.playbackState == Player.STATE_IDLE) realPlayer.prepare()
+        if (backgrounded) {
+            backgrounded = false
+            realPlayer.prepare()
+        }
     }
 
     /// STATE_ENDED can fire more than once (e.g. a stray onPlaybackStateChanged
