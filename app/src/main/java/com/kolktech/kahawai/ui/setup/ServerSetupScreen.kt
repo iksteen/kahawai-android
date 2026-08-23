@@ -2,6 +2,7 @@ package com.kolktech.kahawai.ui.setup
 
 import android.app.Application
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,6 +23,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -64,6 +67,15 @@ fun ServerSetupScreen(
             onValueChange = { urlInput = it },
             label = { Text(stringResource(R.string.setup_hub_address)) },
             singleLine = true,
+            // Uri + no autocorrect/autocapitalize: the leanback (TV) system
+            // keyboard otherwise treats this as a prose field and applies
+            // word suggestions/autocap, silently mangling typed addresses
+            // (e.g. "uwu." landing as "Wu.").
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Uri,
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
             modifier = Modifier.fillMaxWidth(),
         )
         if (state is ServerSetupState.Error) {
