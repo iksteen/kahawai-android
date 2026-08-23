@@ -32,7 +32,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -198,7 +198,7 @@ private fun DetailContent(
     // layout even though it's "portrait", and a landscape phone (compact
     // height) is too short for the stacked full-width hero even when its
     // width lands under the medium breakpoint.
-    val windowSizeClass = currentWindowAdaptiveInfo().windowSizeClass
+    val windowSizeClass = currentWindowAdaptiveInfoV2().windowSizeClass
     val useTwoPane = windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) ||
         !windowSizeClass.isHeightAtLeastBreakpoint(WindowSizeClass.HEIGHT_DP_MEDIUM_LOWER_BOUND)
     val primarySource = detail.sources.firstOrNull()
@@ -391,18 +391,12 @@ private fun DetailInfo(
         }
 
         if (audioTracks.size > 1) {
-            TrackPicker(
-                title = stringResource(R.string.audio),
+            AudioPicker(
+                tracks = audioTracks,
+                selectedIndex = selectedAudioTrackIndex,
+                onSelect = onSelectAudioTrack,
                 modifier = Modifier.padding(top = 16.dp),
-            ) {
-                audioTracks.forEachIndexed { index, track ->
-                    SelectableRow(
-                        text = track.displayLabel(),
-                        selected = index == selectedAudioTrackIndex,
-                        onClick = { onSelectAudioTrack(index) },
-                    )
-                }
-            }
+            )
         }
 
         if (subtitleTracks.isNotEmpty()) {
@@ -433,10 +427,44 @@ private fun DetailInfo(
 }
 
 @Composable
-private fun TrackPicker(title: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+private fun AudioPicker(
+    tracks: List<AudioStreamInfo>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var showPicker by remember { mutableStateOf(false) }
     Column(modifier = modifier) {
-        Text(title, style = MaterialTheme.typography.labelLarge)
-        content()
+        Text(stringResource(R.string.audio), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(bottom = 4.dp))
+        OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth().dpadFocusBorder()) {
+            Text(
+                tracks.getOrNull(selectedIndex)?.displayLabel() ?: "",
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.Start,
+            )
+        }
+    }
+    if (showPicker) {
+        AlertDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(onClick = { showPicker = false }) { Text(stringResource(R.string.detail_subtitles_close)) }
+            },
+            title = { Text(stringResource(R.string.audio)) },
+            text = {
+                // A capped height so the popup itself stays small and
+                // scrolls, instead of growing to fit every track.
+                LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                    itemsIndexed(tracks) { index, track ->
+                        SelectableRow(
+                            text = track.displayLabel(),
+                            selected = index == selectedIndex,
+                            onClick = { onSelect(index); showPicker = false },
+                        )
+                    }
+                }
+            },
+        )
     }
 }
 

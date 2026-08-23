@@ -53,12 +53,16 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.repository.CatalogRepository
+import com.kolktech.kahawai.ui.components.ContinueWatchingCard
 import com.kolktech.kahawai.ui.components.ErrorView
 import com.kolktech.kahawai.ui.components.OnResumeEffect
 import com.kolktech.kahawai.ui.components.PosterCard
 import com.kolktech.kahawai.ui.theme.KahawaiOnSurfaceVariant
 
 private val POSTER_MIN_WIDTH = 100.dp
+// Wider than a poster column: these cards are 16:9, so a poster-width
+// column would make each one nearly square-cropped instead of a banner.
+private val CONTINUE_WATCHING_MIN_WIDTH = 200.dp
 private val GRID_SPACING = 10.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -177,6 +181,10 @@ fun HomeScreen(
                                 val columns = ((maxWidth + GRID_SPACING) / (POSTER_MIN_WIDTH + GRID_SPACING))
                                     .toInt()
                                     .coerceAtLeast(2)
+                                val continueWatchingColumns =
+                                    ((maxWidth + GRID_SPACING) / (CONTINUE_WATCHING_MIN_WIDTH + GRID_SPACING))
+                                        .toInt()
+                                        .coerceAtLeast(1)
                                 // Each grid row of ~[columns] posters is its own
                                 // LazyColumn item (not one item per whole
                                 // library) so scrolling a library into view
@@ -192,12 +200,12 @@ fun HomeScreen(
                                             ContinueWatchingHeader()
                                         }
                                         itemsIndexed(
-                                            s.continueWatching.chunked(columns),
+                                            s.continueWatching.chunked(continueWatchingColumns),
                                             key = { _, chunk -> "continue-watching-${chunk.first().id}" },
                                         ) { chunkIndex, chunk ->
-                                            PosterGridRow(
+                                            ContinueWatchingGridRow(
                                                 chunk,
-                                                columns,
+                                                continueWatchingColumns,
                                                 repo,
                                                 onOpenItem,
                                                 firstItemFocusRequester = if (chunkIndex == 0) {
@@ -308,6 +316,33 @@ private fun LibraryHeader(
                     color = KahawaiOnSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ContinueWatchingGridRow(
+    chunk: List<Item>,
+    columns: Int,
+    repo: CatalogRepository,
+    onOpenItem: (String) -> Unit,
+    firstItemFocusRequester: FocusRequester? = null,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(GRID_SPACING),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    ) {
+        chunk.forEachIndexed { index, item ->
+            ContinueWatchingCard(
+                item,
+                repo,
+                onOpenItem,
+                modifier = Modifier.weight(1f),
+                focusRequester = if (index == 0) firstItemFocusRequester else null,
+            )
+        }
+        repeat(columns - chunk.size) {
+            Spacer(modifier = Modifier.weight(1f))
         }
     }
 }
