@@ -3,6 +3,7 @@ package com.kolktech.kahawai.ui.home
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -153,16 +154,7 @@ fun HomeScreen(
                     onSignInAgain = onSessionExpired,
                 )
                 is HomeState.Loaded -> {
-                    // Wraps both branches below (not just the grid) so the
-                    // empty-library state can also be pulled to refresh.
-                    // isRefreshing only turns on for this drag-triggered
-                    // path — resume/TV-reload calls refresh() without the
-                    // indicator, since those aren't a pull gesture.
-                    PullToRefreshBox(
-                        isRefreshing = s.isRefreshing,
-                        onRefresh = { viewModel.refresh(showIndicator = true) },
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
+                    val content: @Composable BoxScope.() -> Unit = {
                         if (s.rows.isEmpty() && s.continueWatching.isEmpty()) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text(stringResource(R.string.home_no_libraries))
@@ -243,6 +235,28 @@ fun HomeScreen(
                                 }
                             }
                         }
+                    }
+
+                    if (isTelevision) {
+                        // TV has no touch to drag a pull gesture with, and
+                        // PullToRefreshBox's nested scroll connection was
+                        // misreading D-pad-driven focus scrolling as a slow
+                        // pull, animating the indicator down on its own —
+                        // so TV skips the wrapper entirely and relies on the
+                        // explicit reload button in the top bar instead.
+                        content()
+                    } else {
+                        // Wraps both branches above (not just the grid) so the
+                        // empty-library state can also be pulled to refresh.
+                        // isRefreshing only turns on for this drag-triggered
+                        // path — resume calls refresh() without the
+                        // indicator, since that isn't a pull gesture.
+                        PullToRefreshBox(
+                            isRefreshing = s.isRefreshing,
+                            onRefresh = { viewModel.refresh(showIndicator = true) },
+                            modifier = Modifier.fillMaxSize(),
+                            content = content,
+                        )
                     }
                 }
             }
