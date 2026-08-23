@@ -51,6 +51,8 @@
     <string name="detail_subtitles_close">Close</string>
     <string name="detail_chapters">Chapters</string>
     <string name="detail_chapter_numbered">Chapter %1$d</string>
+    <string name="detail_mark_watched">Mark watched</string>
+    <string name="detail_mark_unwatched">Mark unwatched</string>
     <string name="resume_at">Resume at %1$dm</string>
     <string name="resume_at_percent">Resume at %1$dm (%2$d%%)</string>
     <string name="runtime_hours_minutes">%1$dh %2$dm</string>

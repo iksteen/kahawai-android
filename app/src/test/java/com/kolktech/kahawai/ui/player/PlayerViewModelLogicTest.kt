@@ -123,6 +123,49 @@ class PlayerViewModelLogicTest {
         assertNull(next)
     }
 
+    // resolvePreviousEpisode
+
+    @Test
+    fun `returns previous sibling id when item is mid-list`() {
+        val siblings = listOf(episode("e1"), episode("e2"), episode("e3"))
+        val previous = resolvePreviousEpisode(kind = "episode", parentId = "show1", itemId = "e2", siblings = siblings)
+        assertEquals("e1", previous)
+    }
+
+    @Test
+    fun `returns null for the first episode`() {
+        val siblings = listOf(episode("e1"), episode("e2"), episode("e3"))
+        val previous = resolvePreviousEpisode(kind = "episode", parentId = "show1", itemId = "e1", siblings = siblings)
+        assertNull(previous)
+    }
+
+    @Test
+    fun `previous returns null for a non-episode kind`() {
+        val siblings = listOf(episode("e1"), episode("e2"))
+        val previous = resolvePreviousEpisode(kind = "movie", parentId = "show1", itemId = "e2", siblings = siblings)
+        assertNull(previous)
+    }
+
+    @Test
+    fun `previous returns null when parentId is null`() {
+        val siblings = listOf(episode("e1"), episode("e2"))
+        val previous = resolvePreviousEpisode(kind = "episode", parentId = null, itemId = "e2", siblings = siblings)
+        assertNull(previous)
+    }
+
+    @Test
+    fun `previous returns null when itemId is not found in siblings`() {
+        val siblings = listOf(episode("e1"), episode("e2"))
+        val previous = resolvePreviousEpisode(kind = "episode", parentId = "show1", itemId = "missing", siblings = siblings)
+        assertNull(previous)
+    }
+
+    @Test
+    fun `previous returns null for empty siblings`() {
+        val previous = resolvePreviousEpisode(kind = "episode", parentId = "show1", itemId = "e1", siblings = emptyList())
+        assertNull(previous)
+    }
+
     // computeOriginCorrection
 
     @Test

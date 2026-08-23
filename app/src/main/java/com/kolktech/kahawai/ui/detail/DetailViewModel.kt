@@ -27,6 +27,10 @@ sealed interface DetailState {
         val subtitleTracks: List<SubtitleTrack> = emptyList(),
         val selectedSubtitleTrack: SubtitleTrack? = null,
         val selectedAudioTrackIndex: Int = 0,
+        /// True while a "Mark watched"/"Mark unwatched" call is in
+        /// flight — disables the button so a slow link can't queue a
+        /// second toggle behind the first.
+        val watchedActionInFlight: Boolean = false,
     ) : DetailState
 }
 
@@ -37,6 +41,13 @@ class DetailViewModel(
 ) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<DetailState>(DetailState.Loading)
     val state: StateFlow<DetailState> = _state
+
+    private val _transientError = MutableStateFlow<String?>(null)
+    val transientError: StateFlow<String?> = _transientError
+
+    fun clearTransientError() {
+        _transientError.value = null
+    }
 
     init {
         load()
@@ -95,6 +106,35 @@ class DetailViewModel(
                 )
             } catch (e: Exception) {
                 // Best-effort; the screen already has content to show.
+            }
+        }
+    }
+
+    /// Ticks this item watched/unwatched with no playback session
+    /// (mirrors web's `useWatched().mark`, item.ts). Marking either
+    /// direction clears the resume position server-side, so the local
+    /// copy drops it too rather than waiting for a re-fetch.
+    fun toggleWatched() {
+        val current = _state.value as? DetailState.Loaded ?: return
+        if (current.watchedActionInFlight) return
+        val target = !current.detail.played
+        _state.value = current.copy(watchedActionInFlight = true)
+        viewModelScope.launch {
+            try {
+                val update = repo.setWatched(itemId, target)
+                val loaded = _state.value as? DetailState.Loaded ?: return@launch
+                _state.value = loaded.copy(
+                    detail = loaded.detail.copy(
+                        played = update.played,
+                        playCount = update.playCount,
+                        resumePositionMs = update.positionMs,
+                    ),
+                    watchedActionInFlight = false,
+                )
+            } catch (e: Exception) {
+                val loaded = _state.value as? DetailState.Loaded ?: return@launch
+                _state.value = loaded.copy(watchedActionInFlight = false)
+                _transientError.value = e.readableMessage()
             }
         }
     }

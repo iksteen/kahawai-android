@@ -2,5 +2,7 @@
 <resources>
     <color name="kahawai_bg">#0D191C</color>
     <color name="kahawai_accent">#3ECDA0</color>
-    <color name="ic_launcher_background">#0B0E11</color>
+    <!-- Matches the kahawai.png logo's own white backdrop so the safe-zone
+         padding around ic_launcher_foreground blends in seamlessly. -->
+    <color name="ic_launcher_background">#FFFFFF</color>
 </resources>

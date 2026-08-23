@@ -32,6 +32,8 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -107,12 +109,24 @@ fun DetailScreen(
         factory = viewModelFactory { initializer { DetailViewModel(application, repo, itemId) } },
     )
     val state by viewModel.state.collectAsState()
+    val transientError by viewModel.transientError.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // The ViewModel outlives trips into the player (it's retained by this
     // destination's back-stack entry), so without this the screen would
     // redisplay the resume position from when it was FIRST opened —
     // "Resume at 1m" forever, no matter how far playback got.
     OnResumeEffect(viewModel::refresh)
+
+    // A failed "Mark watched" toggle — the page and its data are intact,
+    // so this is a line on it, not a replacement for it (mirrors
+    // PlayerScreen's transientError/Snackbar handling).
+    LaunchedEffect(transientError) {
+        transientError?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.clearTransientError()
+        }
+    }
 
     val playButtonFocusRequester = remember { FocusRequester() }
     val firstChildFocusRequester = remember { FocusRequester() }
@@ -151,11 +165,16 @@ fun DetailScreen(
                     onPlay = onPlay,
                     onSelectAudioTrack = viewModel::selectAudioTrackIndex,
                     onSelectSubtitleTrack = viewModel::selectSubtitleTrack,
+                    onToggleWatched = viewModel::toggleWatched,
                     playButtonFocusRequester = playButtonFocusRequester,
                     firstChildFocusRequester = firstChildFocusRequester,
                 )
             }
         }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+        )
         // Floating over the hero image (same treatment as the player's
         // own back button) rather than a full TopAppBar, which would
         // shove the artwork down and duplicate the title shown right
@@ -188,6 +207,7 @@ private fun DetailContent(
     onPlay: (itemId: String, startMs: Long, audioTrack: Int, subtitleTrackId: Long?) -> Unit,
     onSelectAudioTrack: (Int) -> Unit,
     onSelectSubtitleTrack: (SubtitleTrack?) -> Unit,
+    onToggleWatched: () -> Unit,
     playButtonFocusRequester: FocusRequester,
     firstChildFocusRequester: FocusRequester,
 ) {
@@ -256,6 +276,8 @@ private fun DetailContent(
                             onSelectAudioTrack = onSelectAudioTrack,
                             onSelectSubtitleTrack = onSelectSubtitleTrack,
                             onPlay = onPlay,
+                            onToggleWatched = onToggleWatched,
+                            watchedActionInFlight = state.watchedActionInFlight,
                             playButtonFocusRequester = playButtonFocusRequester,
                         )
                     }
@@ -308,6 +330,8 @@ private fun DetailContent(
                             onSelectAudioTrack = onSelectAudioTrack,
                             onSelectSubtitleTrack = onSelectSubtitleTrack,
                             onPlay = onPlay,
+                            onToggleWatched = onToggleWatched,
+                            watchedActionInFlight = state.watchedActionInFlight,
                             playButtonFocusRequester = playButtonFocusRequester,
                         )
                     }
@@ -339,6 +363,8 @@ private fun DetailInfo(
     onSelectAudioTrack: (Int) -> Unit,
     onSelectSubtitleTrack: (SubtitleTrack?) -> Unit,
     onPlay: (itemId: String, startMs: Long, audioTrack: Int, subtitleTrackId: Long?) -> Unit,
+    onToggleWatched: () -> Unit,
+    watchedActionInFlight: Boolean,
     playButtonFocusRequester: FocusRequester,
 ) {
     Text(detail.title, style = MaterialTheme.typography.headlineSmall)
@@ -387,6 +413,13 @@ private fun DetailInfo(
                 ) {
                     Text(stringResource(R.string.detail_start_over))
                 }
+            }
+            OutlinedButton(
+                onClick = onToggleWatched,
+                enabled = !watchedActionInFlight,
+                modifier = Modifier.dpadFocusBorder(),
+            ) {
+                Text(stringResource(if (detail.played) R.string.detail_mark_unwatched else R.string.detail_mark_watched))
             }
         }
 

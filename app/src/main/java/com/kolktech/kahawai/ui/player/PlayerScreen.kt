@@ -31,8 +31,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -57,6 +60,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -109,6 +113,12 @@ private val DPAD_KEYS = setOf(
     KeyEvent.KEYCODE_DPAD_RIGHT,
 )
 
+private val OK_KEYS = setOf(
+    KeyEvent.KEYCODE_DPAD_CENTER,
+    KeyEvent.KEYCODE_ENTER,
+    KeyEvent.KEYCODE_NUMPAD_ENTER,
+)
+
 private val PLAYBACK_SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
@@ -124,6 +134,7 @@ fun PlayerScreen(
     appSettingsStore: AppSettingsStore,
     onClose: () -> Unit,
     onNextEpisode: (itemId: String, subtitleTrackId: Long?) -> Unit = { _, _ -> },
+    onPreviousEpisode: (itemId: String, subtitleTrackId: Long?) -> Unit = { _, _ -> },
     initialAudioTrack: Int = 0,
     initialSubtitleTrackId: Long? = null,
 ) {
@@ -153,6 +164,15 @@ fun PlayerScreen(
     val closeAndPause: () -> Unit = {
         viewModel.player.pause()
         onClose()
+    }
+
+    // Fires once handlePlaybackEnded() determines there's no next episode
+    // (movie, or last episode of a show) — return to the detail screen
+    // already underneath this one on the back stack instead of leaving
+    // playback sitting on a frozen/black final frame.
+    val playbackFinished by viewModel.playbackFinished.collectAsState()
+    LaunchedEffect(playbackFinished) {
+        if (playbackFinished) closeAndPause()
     }
 
     BackHandler(onBack = closeAndPause)
@@ -227,7 +247,7 @@ fun PlayerScreen(
                     Text(stringResource(R.string.kw_back))
                 }
             }
-            is PlayerState.Ready -> PlayerContent(viewModel, appSettingsStore, closeAndPause)
+            is PlayerState.Ready -> PlayerContent(viewModel, appSettingsStore, closeAndPause, onNextEpisode, onPreviousEpisode)
         }
     }
 }
@@ -277,7 +297,13 @@ private const val SEEK_CHAIN_WINDOW_MS = 800L
 private const val TV_BACK_EXIT_WINDOW_MS = 1_000L
 
 @Composable
-private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSettingsStore, onClose: () -> Unit) {
+private fun PlayerContent(
+    viewModel: PlayerViewModel,
+    appSettingsStore: AppSettingsStore,
+    onClose: () -> Unit,
+    onNextEpisode: (itemId: String, subtitleTrackId: Long?) -> Unit,
+    onPreviousEpisode: (itemId: String, subtitleTrackId: Long?) -> Unit,
+) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val audioManager = remember(context) {
@@ -414,6 +440,16 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
                     }
                     event.keyCode in DPAD_KEYS && !view.isControllerFullyVisible -> {
                         if (event.action == KeyEvent.ACTION_DOWN) view.showController()
+                        true
+                    }
+                    // OK/enter with the controls hidden toggles play/pause
+                    // in place instead of surfacing them - once the
+                    // controls are up, OK reaches the (focused) play/pause
+                    // button itself and this branch is skipped.
+                    event.keyCode in OK_KEYS && !view.isControllerFullyVisible -> {
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            if (viewModel.player.isPlaying) viewModel.player.pause() else viewModel.player.play()
+                        }
                         true
                     }
                     else -> false
@@ -1053,6 +1089,53 @@ private fun PlayerContent(viewModel: PlayerViewModel, appSettingsStore: AppSetti
         // push updates into it from composition.
         LaunchedEffect(title, playerView) {
             playerView?.findViewById<TextView>(R.id.kw_player_title)?.text = title.orEmpty()
+        }
+
+        // kw_prev/kw_next (see kw_player_control_view.xml for why they're
+        // not exo_prev/exo_next) stay gone until adjacentEpisodes resolves
+        // an id on that side — a movie or the first/last episode of a show
+        // leaves the corresponding button hidden rather than shown-but-
+        // useless. subtitleTrack id rides along so the next/previous
+        // episode opens with the same language already selected.
+        val adjacentEpisodes by viewModel.adjacentEpisodes.collectAsState()
+        LaunchedEffect(adjacentEpisodes, playerView) {
+            val previousId = adjacentEpisodes?.previousId
+            val nextId = adjacentEpisodes?.nextId
+            playerView?.findViewById<ImageButton>(R.id.kw_prev)?.apply {
+                visibility = if (previousId != null) View.VISIBLE else View.GONE
+                setOnClickListener {
+                    previousId?.let { onPreviousEpisode(it, viewModel.selectedSubtitleTrack.value?.id) }
+                }
+            }
+            playerView?.findViewById<ImageButton>(R.id.kw_next)?.apply {
+                visibility = if (nextId != null) View.VISIBLE else View.GONE
+                setOnClickListener {
+                    nextId?.let { onNextEpisode(it, viewModel.selectedSubtitleTrack.value?.id) }
+                }
+            }
+        }
+
+        // Center pause glyph — feedback that playback is actually paused
+        // (as opposed to stalled/still loading) whether the viewer paused
+        // via the controls or, with them hidden, an OK/enter press (see
+        // the onPlayerKey branch above). Excluded from PiP, whose tiny
+        // window has no room for anything but the video itself.
+        val isPaused by viewModel.isPaused.collectAsState()
+        if (isPaused && !isInPip) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(88.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(androidx.media3.ui.R.drawable.exo_icon_pause),
+                    contentDescription = stringResource(androidx.media3.ui.R.string.exo_controls_pause_description),
+                    tint = Color.White,
+                    modifier = Modifier.size(48.dp),
+                )
+            }
         }
 
         // Overlay chrome (gesture indicators, snackbars) has no place in

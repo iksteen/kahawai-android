@@ -172,3 +172,26 @@ data class ItemDetail(
     /// analysed yet" — a client cannot act on the difference.
     val segments: List<Segment> = emptyList(),
 )
+
+/// `PUT /api/v1/items/{id}/watched` (api.rs `item_set_watched`, HUB-10)
+/// request body. `items` is left null — this client only ever marks the
+/// one item on its own detail page, never a batch.
+@Serializable
+data class WatchedRequest(
+    val played: Boolean,
+    val items: List<String>? = null,
+)
+
+/// Mirrors `WatchUpdate` in api.rs:937-942. Marking either direction
+/// clears the server's resume position, hence `positionMs` always comes
+/// back 0.
+@Serializable
+data class WatchUpdate(
+    val itemId: String,
+    val positionMs: Long,
+    val played: Boolean,
+    val playCount: Int,
+)
+
+@Serializable
+data class UpdatedResponse(val updated: List<WatchUpdate>)

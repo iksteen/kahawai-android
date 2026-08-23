@@ -34,10 +34,22 @@
         android:gravity="center_vertical"
         android:layoutDirection="ltr">
 
-      <ImageButton android:id="@id/exo_prev"
+      <!-- kw_prev/kw_next (not exo_prev/exo_next): PlayerControlView only
+           wires up its own previous/next-episode navigation, dimming and
+           auto managing enabled state based on the player's own timeline
+           (COMMAND_SEEK_TO_PREVIOUS/NEXT) rather than the actual show's
+           adjacent episodes — since every session is a single MediaItem,
+           that left "<" just restarting the current item and ">"
+           permanently disabled. findViewById(R.id.exo_prev/exo_next) is
+           null-guarded in PlayerControlView, so giving these custom ids
+           opts them out of that management entirely; PlayerScreen owns
+           their visibility and click handling instead (see
+           adjacentEpisodes wiring). -->
+      <ImageButton android:id="@+id/kw_prev"
           style="@style/ExoStyledControls.Button.Bottom"
           android:src="@drawable/exo_styled_controls_previous"
           android:scaleType="fitCenter"
+          android:visibility="gone"
           android:contentDescription="@string/exo_controls_previous_description"/>
 
       <ImageButton android:id="@id/exo_play_pause"
@@ -46,10 +58,11 @@
           android:scaleType="fitCenter"
           android:contentDescription="@string/exo_controls_play_description"/>
 
-      <ImageButton android:id="@id/exo_next"
+      <ImageButton android:id="@+id/kw_next"
           style="@style/ExoStyledControls.Button.Bottom"
           android:src="@drawable/exo_styled_controls_next"
           android:scaleType="fitCenter"
+          android:visibility="gone"
           android:contentDescription="@string/exo_controls_next_description"/>
 
       <LinearLayout android:id="@id/exo_time"

@@ -19,6 +19,8 @@ import com.kolktech.kahawai.data.network.dto.SeekResponse
 import com.kolktech.kahawai.data.network.dto.StartSessionRequest
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.TokenPair
+import com.kolktech.kahawai.data.network.dto.UpdatedResponse
+import com.kolktech.kahawai.data.network.dto.WatchedRequest
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
@@ -76,6 +78,12 @@ interface ApiService {
     /// one request answers both halves of the item page.
     @HTTP(method = "QUERY", path = "api/v1/items/{id}", hasBody = true)
     suspend fun itemQuery(@Path("id") id: String, @Body body: ItemQueryRequest): ItemDetail
+
+    /// Ticks an item watched/unwatched without a playback session
+    /// (HUB-10, api.rs `item_set_watched`). Either direction clears the
+    /// item's resume position server-side.
+    @PUT("api/v1/items/{id}/watched")
+    suspend fun setWatched(@Path("id") id: String, @Body body: WatchedRequest): UpdatedResponse
 
     @GET("api/v1/items/{id}/children")
     suspend fun children(@Path("id") id: String): ChildrenResponse

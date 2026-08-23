@@ -115,6 +115,27 @@ internal fun resolveNextEpisode(
     return if (index >= 0) siblings.getOrNull(index + 1)?.id else null
 }
 
+/// Mirror of [resolveNextEpisode] for the "<" button — the sibling
+/// before [itemId]'s own position, or null for non-episodes, items with
+/// no parent, the first episode of a show, or an [itemId] not found in
+/// [siblings].
+internal fun resolvePreviousEpisode(
+    kind: String?,
+    parentId: String?,
+    itemId: String,
+    siblings: List<Item>,
+): String? {
+    if (kind != "episode" || parentId == null) return null
+    val index = siblings.indexOfFirst { it.id == itemId }
+    return if (index > 0) siblings.getOrNull(index - 1)?.id else null
+}
+
+/// Which episodes the player's "<"/">" buttons should offer, resolved
+/// once at start() alongside the title (see [PlayerViewModel.start]).
+/// Both null for a movie/non-episode item — PlayerScreen hides both
+/// buttons entirely in that case rather than showing disabled controls.
+internal data class AdjacentEpisodes(val previousId: String?, val nextId: String?)
+
 /// See [PlayerViewModel.syncOrigin]. [correctedOffsetMs] is the hub's
 /// keyframe-snapped origin (partBaseMs + the pipeline-local position it
 /// actually landed on); [inBounds] guards against applying it when it's
@@ -237,6 +258,15 @@ class PlayerViewModel(
     private val _state = MutableStateFlow<PlayerState>(PlayerState.Loading)
     val state: StateFlow<PlayerState> = _state
 
+    /// True only while genuinely paused (playWhenReady false at
+    /// STATE_READY) — deliberately excludes buffering/loading/ended so
+    /// the center pause glyph doesn't flash up over the buffering spinner
+    /// or a just-finished/not-yet-started playback. Recomputed off both
+    /// onIsPlayingChanged and onPlaybackStateChanged (see the listener in
+    /// init) since either alone can flip it.
+    private val _isPaused = MutableStateFlow(false)
+    val isPaused: StateFlow<Boolean> = _isPaused
+
     /// Failures that DON'T end the session — a failed seek or subtitle
     /// switch leaves the current stream playable, so they surface as a
     /// snackbar over the still-running player rather than tearing the
@@ -251,11 +281,24 @@ class PlayerViewModel(
 
     /// Resolved once playback naturally reaches the end (see
     /// handlePlaybackEnded) — the id of the next episode in the same show,
-    /// if there is one. PlayerScreen navigates to it as soon as it's set;
-    /// staying null just leaves playback ended, same as before this
-    /// feature existed (last episode of a show, or a non-episode item).
+    /// if there is one. PlayerScreen navigates to it as soon as it's set.
     private val _nextEpisodeId = MutableStateFlow<String?>(null)
     val nextEpisodeId: StateFlow<String?> = _nextEpisodeId
+
+    /// Resolved once, alongside the title, in start(). Null for a movie;
+    /// for an episode, carries whichever of the previous/next sibling ids
+    /// actually exist so PlayerScreen can show/hide and wire up the "<"/
+    /// ">" buttons.
+    private val _adjacentEpisodes = MutableStateFlow<AdjacentEpisodes?>(null)
+    internal val adjacentEpisodes: StateFlow<AdjacentEpisodes?> = _adjacentEpisodes
+
+    /// Flips once handlePlaybackEnded() determines there's no next episode
+    /// to auto-advance to (a movie, or the last episode of a show).
+    /// PlayerScreen closes the player as soon as it's set, landing back on
+    /// the detail screen already underneath it on the back stack instead of
+    /// leaving playback sitting on a frozen/black final frame.
+    private val _playbackFinished = MutableStateFlow(false)
+    val playbackFinished: StateFlow<Boolean> = _playbackFinished
 
     /// Resolved alongside session start (see start()) purely for display
     /// in the player's top bar — best-effort, same as the subtitle track
@@ -469,6 +512,7 @@ class PlayerViewModel(
         realPlayer.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (!isPlaying) reportProgressNow()
+                updatePausedState()
             }
 
             /// Diagnostic only: if the "start of video jumps forward"
@@ -511,6 +555,7 @@ class PlayerViewModel(
                 )
                 if (playbackState == Player.STATE_READY) everReachedReady = true
                 if (playbackState == Player.STATE_ENDED) handlePlaybackEnded()
+                updatePausedState()
             }
 
             /// Sideloaded subtitle track groups (attach()'s
@@ -537,8 +582,16 @@ class PlayerViewModel(
                 } else {
                     detail.title
                 }
+                val parentId = detail.parentId
+                if (detail.kind == "episode" && parentId != null) {
+                    val siblings = catalogRepo.children(parentId)
+                    _adjacentEpisodes.value = AdjacentEpisodes(
+                        previousId = resolvePreviousEpisode(detail.kind, parentId, itemId, siblings),
+                        nextId = resolveNextEpisode(detail.kind, parentId, itemId, siblings),
+                    )
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "failed to resolve title for item=$itemId", e)
+                Log.w(TAG, "failed to resolve title/adjacent episodes for item=$itemId", e)
             }
         }
         viewModelScope.launch {
@@ -709,6 +762,10 @@ class PlayerViewModel(
         }
     }
 
+    private fun updatePausedState() {
+        _isPaused.value = !realPlayer.playWhenReady && realPlayer.playbackState == Player.STATE_READY
+    }
+
     /// STATE_ENDED can fire more than once (e.g. a stray onPlaybackStateChanged
     /// replay), so [playbackEndedHandled] guards against issuing the
     /// children() lookup twice. The current session/progress teardown is
@@ -724,15 +781,21 @@ class PlayerViewModel(
             try {
                 val detail = catalogRepo.item(itemId)
                 val parentId = detail.parentId
-                if (detail.kind != "episode" || parentId == null) return@launch
+                if (detail.kind != "episode" || parentId == null) {
+                    _playbackFinished.value = true
+                    return@launch
+                }
                 val siblings = catalogRepo.children(parentId)
                 val nextId = resolveNextEpisode(detail.kind, parentId, itemId, siblings)
                 if (nextId != null) {
                     Log.d(TAG, "auto-advancing item=$itemId -> next=$nextId")
                     _nextEpisodeId.value = nextId
+                } else {
+                    _playbackFinished.value = true
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "failed to resolve next episode after item=$itemId ended", e)
+                _playbackFinished.value = true
             }
         }
     }

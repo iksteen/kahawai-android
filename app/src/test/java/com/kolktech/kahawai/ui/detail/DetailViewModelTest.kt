@@ -240,6 +240,89 @@ class DetailViewModelTest {
     }
 
     @Test
+    fun `toggleWatched marks the item and clears its resume position`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"id":"item1","kind":"movie","title":"Arrival","played":false,"resume_position_ms":120000}""",
+            ),
+        )
+        val viewModel = vm()
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is DetailState.Loading) item = awaitItem()
+            val loaded = item as DetailState.Loaded
+            assertFalse(loaded.detail.played)
+
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"updated":[{"item_id":"item1","position_ms":0,"played":true,"play_count":1}]}""",
+                ),
+            )
+            viewModel.toggleWatched()
+
+            val inFlight = awaitItem() as DetailState.Loaded
+            assertTrue(inFlight.watchedActionInFlight)
+
+            val done = awaitItem() as DetailState.Loaded
+            assertFalse(done.watchedActionInFlight)
+            assertTrue(done.detail.played)
+            assertEquals(1, done.detail.playCount)
+            assertEquals(0L, done.detail.resumePositionMs)
+        }
+    }
+
+    @Test
+    fun `toggleWatched failure clears in-flight and surfaces a transient error`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"id":"item1","kind":"movie","title":"Arrival"}"""))
+        val viewModel = vm()
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is DetailState.Loading) item = awaitItem()
+            item as DetailState.Loaded
+
+            server.enqueue(MockResponse().setResponseCode(500))
+            viewModel.toggleWatched()
+
+            val inFlight = awaitItem() as DetailState.Loaded
+            assertTrue(inFlight.watchedActionInFlight)
+
+            val failed = awaitItem() as DetailState.Loaded
+            assertFalse(failed.watchedActionInFlight)
+            assertFalse(failed.detail.played)
+        }
+        assertTrue(viewModel.transientError.value != null)
+    }
+
+    @Test
+    fun `toggleWatched ignores a second call while one is in flight`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"id":"item1","kind":"movie","title":"Arrival"}"""))
+        val viewModel = vm()
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is DetailState.Loading) item = awaitItem()
+            item as DetailState.Loaded
+
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"updated":[{"item_id":"item1","position_ms":0,"played":true,"play_count":1}]}""",
+                ),
+            )
+            viewModel.toggleWatched()
+            awaitItem() as DetailState.Loaded // in-flight
+
+            viewModel.toggleWatched() // no-op: already in flight
+
+            val done = awaitItem() as DetailState.Loaded
+            assertFalse(done.watchedActionInFlight)
+            assertTrue(done.detail.played)
+        }
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
     fun `selectAudioTrackIndex updates state only when already Loaded`() = runTest {
         server.enqueue(MockResponse().setBody("""{"id":"item1","kind":"movie","title":"Arrival"}"""))
         val viewModel = vm()

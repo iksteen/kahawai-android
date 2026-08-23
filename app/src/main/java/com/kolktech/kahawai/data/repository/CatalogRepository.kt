@@ -8,6 +8,8 @@ import com.kolktech.kahawai.data.network.dto.ItemDetail
 import com.kolktech.kahawai.data.network.dto.ItemQueryRequest
 import com.kolktech.kahawai.data.network.dto.ItemsResponse
 import com.kolktech.kahawai.data.network.dto.LibrarySummary
+import com.kolktech.kahawai.data.network.dto.WatchUpdate
+import com.kolktech.kahawai.data.network.dto.WatchedRequest
 
 /// [api] is built lazily, not eagerly at construction: this repository is
 /// `remember`ed once at the top of the nav graph, which composes (and
@@ -55,6 +57,12 @@ class CatalogRepository(apiProvider: () -> ApiService = { ApiClient.apiService()
     )
 
     suspend fun children(id: String): List<Item> = api.children(id).children
+
+    /// Ticks [id] watched or unwatched without playing it — the detail
+    /// page's "Mark watched" toggle. Returns this item's own update
+    /// (there's always exactly one, since no batch `items` is sent).
+    suspend fun setWatched(id: String, played: Boolean): WatchUpdate =
+        api.setWatched(id, WatchedRequest(played = played)).updated.first { it.itemId == id }
 
     /// `size` is one of the hub's named sizes ("thumb", "card"); null
     /// serves the original. `version` busts the cache on re-match
