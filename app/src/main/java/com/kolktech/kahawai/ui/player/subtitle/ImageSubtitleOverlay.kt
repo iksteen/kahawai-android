@@ -43,13 +43,21 @@ import kotlin.coroutines.coroutineContext
 private const val TAG = "ImageSubtitleOverlay"
 
 /// The redraw loop below always prefers the newest set whose startMs has
-/// passed (`lastOrNull { it.startMs <= t }`), so once a later set has
-/// arrived, everything before its immediate predecessor is unreachable —
-/// keeping every set (bitmaps included) for a whole session was unbounded
-/// memory growth on long content. This trailing window is generous enough
-/// to cover the 200ms redraw poll and a lingering pause without ever
-/// discarding a set that could still be the active one.
-private const val MAX_BUFFERED_SETS = 8
+/// passed (`lastOrNull { it.startMs <= t }`). A small trailing window here
+/// used to assume the tap arrives roughly paced with playback (a handful
+/// of sets ahead at most) — wrong: the hub's remux pipeline decodes the
+/// whole PGS track's display sets as fast as it can, independent of
+/// playback position, and streams a session's entire backlog in one burst
+/// on connect. With a window sized for "a few sets ahead", that burst
+/// evicted every set near the actual (still-near-zero) playback position
+/// before the redraw loop ever got to look at them — subtitles either
+/// never appeared or only flashed briefly if a live one barely survived
+/// the eviction race. The window has to be sized to hold a whole session's
+/// worth of cues instead, not just the redraw poll's lookahead — bounded
+/// only as a backstop against a runaway/corrupt stream, comfortably above
+/// even a dense feature-length track's cue count (each cue is a start +
+/// a later empty clear, so ~2 entries per line of dialogue).
+private const val MAX_BUFFERED_SETS = 4096
 
 /// One line of the session's `subs-{id}.jsonl` tap for an IMAGE
 /// (PGS/VobSub) track — a decoded display set. Composition space (`cw`,
@@ -195,11 +203,29 @@ fun ImageSubtitleOverlay(
             // used to mean subtitles silently never came back until the
             // next seek or track switch. Retry the CONNECTION a few
             // times (same 3x/700ms shape as syncOrigin) for the session
-            // tap, but only while nothing has arrived yet — once the
-            // stream has proven itself, an EOF is the hub deliberately
-            // closing it. The whole-file raster fetch has nothing to
-            // race (item-level, complete before the first byte), so it
-            // gets a single attempt.
+            // tap while nothing has arrived yet. The whole-file raster
+            // fetch has nothing to race (item-level, complete before the
+            // first byte), so it gets a single attempt.
+            //
+            // Once the session tap HAS delivered at least one line, an
+            // EOF still isn't reliably "done": the hub's session_file
+            // handler (crates/kahawai-hub/src/api.rs) has no concept of
+            // "track exhausted" at all — a PGS track with no more cues
+            // just leaves the connection open and silent. Every real
+            // close after data has flowed is either the whole session
+            // ending (which tears this LaunchedEffect down anyway via a
+            // fresh epoch on the next attach()) or a transient failure —
+            // a transcoder RPC timeout/reschedule for Mode::Transcode
+            // sessions — that the hub's own truncation-branch comment
+            // frames as "the client reconnects". So the session tap
+            // retries forever on EOF once isActive; unlike
+            // AssSubtitleOverlay's .ass feedFrom (which can't safely
+            // re-feed duplicate Dialogue lines into libass on a
+            // from-scratch reconnect), re-received display sets here are
+            // harmless — MAX_BUFFERED_SETS just re-settles to the same
+            // tail. The raster fetch keeps its old one-shot behavior:
+            // it's a complete file, not a growing tap, so there's never
+            // anything more to reconnect for.
             var attempt = 0
             var gotAnything = false
             while (isActive) {
@@ -248,7 +274,8 @@ fun ImageSubtitleOverlay(
                 } finally {
                     cancelHandle.dispose()
                 }
-                if (gotAnything || ++attempt >= maxAttempts) break
+                val giveUp = if (gotAnything) maxAttempts == 1 else ++attempt >= maxAttempts
+                if (giveUp) break
                 delay(700)
             }
         }
