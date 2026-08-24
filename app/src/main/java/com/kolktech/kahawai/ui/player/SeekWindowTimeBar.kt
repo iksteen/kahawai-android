@@ -6,11 +6,32 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.util.AttributeSet
+import android.view.KeyEvent
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.DefaultTimeBar
+import androidx.media3.ui.TimeBar
 import com.kolktech.kahawai.R
+
+/// Per-press D-pad seek step, in ms, for a key held for [repeatCount]
+/// system auto-repeats (0 on the initial, un-repeated press). Tiered
+/// rather than a smooth curve so a viewer feels a small number of
+/// distinct "gears" instead of a jump size that's already hard to predict
+/// a few hundred ms into holding the key down.
+///
+/// A bare tap needs to move the playhead by about a second - fine enough
+/// to land on a specific frame - while holding the key has to cross a
+/// two-hour movie in a few seconds, which a flat per-tick amount can't do
+/// on its own: the system's key-repeat rate (roughly one event per 50ms)
+/// already multiplies whatever's returned here, so each tier's ms/press
+/// compounds into a much larger ms/second once repeats are flowing.
+internal fun leanbackSeekIncrementMs(repeatCount: Int): Long = when {
+    repeatCount < 10 -> 1_000L
+    repeatCount < 30 -> 5_000L
+    repeatCount < 60 -> 15_000L
+    else -> 30_000L
+}
 
 /// Where the band lands on the bar, in pixels, or null if there's nothing
 /// to draw. [leftPx]/[rightPx] are the bar's own drawing edges.
@@ -96,6 +117,77 @@ class SeekWindowTimeBar @JvmOverloads constructor(
     override fun hideScrubber(disableScrubberPadding: Boolean) = Unit
 
     override fun hideScrubber(animationDurationMs: Long) = Unit
+
+    /// Tracks DefaultTimeBar's own (private) scrubbing flag via the same
+    /// listener hook it notifies PlayerControlView through, so Back can
+    /// tell whether there's a pending seek to cancel.
+    private var scrubbing = false
+
+    init {
+        addListener(
+            object : TimeBar.OnScrubListener {
+                override fun onScrubStart(timeBar: TimeBar, position: Long) {
+                    scrubbing = true
+                }
+
+                override fun onScrubMove(timeBar: TimeBar, position: Long) = Unit
+
+                override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
+                    scrubbing = false
+                }
+            },
+        )
+    }
+
+    /// DefaultTimeBar's own D-pad handling (which this defers straight to
+    /// below) reads a single fixed key-time-increment for every press -
+    /// left unset, that default is duration/20, a step that scales with
+    /// the title instead of the clock and lands around a full minute per
+    /// press on anything longer than a few minutes. Setting the increment
+    /// here, keyed to how many auto-repeats the held key has produced so
+    /// far, turns that one fixed step into the tiered ramp from
+    /// [leanbackSeekIncrementMs]: a lone tap nudges by a second, holding
+    /// the key ramps up through it.
+    ///
+    /// Back gets special handling while a seek is pending: DefaultTimeBar
+    /// itself has no notion of "cancel" from the keyboard - only OK/Enter
+    /// (which commits) and losing focus, which also commits, silently
+    /// landing Back on the scrubbed-to position instead of leaving
+    /// playback where it was. Disabling and re-enabling the bar is the
+    /// only public surface that reaches its private cancel path (see
+    /// DefaultTimeBar.setEnabled, which stops scrubbing with canceled=true
+    /// when disabled mid-scrub) - both calls land within this one key
+    /// event, so there's no visible disabled flash. A cancelled stop never
+    /// seeks the player (see PlayerControlView's onScrubStop), so nothing
+    /// needs to be un-seeked; the bar's own displayed position resyncs on
+    /// PlayerControlView's next progress tick, which a non-scrubbing state
+    /// now lets through again. The key is consumed so Back cancels the
+    /// seek on its own press rather than also closing the player behind
+    /// it.
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK && scrubbing) {
+            isEnabled = false
+            isEnabled = true
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            setKeyTimeIncrement(leanbackSeekIncrementMs(event.repeatCount))
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /// DefaultTimeBar schedules exactly one delayed callback anywhere in
+    /// its implementation: a 1s "stop scrubbing" timer re-armed on every
+    /// D-pad press, which auto-commits the pending seek once the key goes
+    /// quiet for a second - racing OK/Back for the same decision this bar
+    /// otherwise leaves to them explicitly. There's no public handle on
+    /// that callback to cancel just it, so this drops every 1s post this
+    /// view is asked to schedule; if a future DefaultTimeBar adds another
+    /// legitimate one, it would silently stop firing too.
+    override fun postDelayed(action: Runnable, delayMillis: Long): Boolean {
+        if (delayMillis == 1_000L) return true
+        return super.postDelayed(action, delayMillis)
+    }
 
     private var durationMs: Long = 0
     private var bufferedMs: Long = 0
