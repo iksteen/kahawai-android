@@ -669,12 +669,11 @@ private fun PlayerContent(
     // this composable self-contained.
     val subtitleRepo = remember { PlaybackRepository() }
 
-    // HUB-37: chapter marks on the native styled progress bar. Media3
-    // swaps the layout's exo_progress_placeholder for a real
-    // DefaultTimeBar (id exo_progress) at inflate time — it already
-    // supports drawing marks via the ad-break API, which is the only
-    // public hook this view offers for "ticks other than the played/
-    // buffered fill". A short retry (mirrors syncOrigin's shape) covers
+    // HUB-37: chapter marks on the native styled progress bar. The
+    // controller layout's time bar (id exo_progress, a
+    // SeekWindowTimeBar) already supports drawing marks via the ad-break
+    // API, which is the only public hook this view offers for "ticks
+    // other than the played/buffered fill". A short retry (mirrors syncOrigin's shape) covers
     // "direct" mode, where the true duration isn't known the instant
     // Ready fires; HLS sessions already know it up front via the
     // ForwardingPlayer override.
@@ -1118,6 +1117,11 @@ private fun PlayerContent(
                     // Back button + title live inside the controller
                     // layout (kw_player_control_view.xml) so they fade
                     // in sync with the rest of the controls.
+                    // The bar shades what a seek reaches instantly; its
+                    // start is the one end it can't get from the player
+                    // (see SeekWindowTimeBar).
+                    findViewById<SeekWindowTimeBar>(androidx.media3.ui.R.id.exo_progress).windowStartMs =
+                        { viewModel.seekWindowStartMs }
                     findViewById<ImageButton>(R.id.kw_back).setOnClickListener { onClose() }
                     findViewById<ImageButton>(androidx.media3.ui.R.id.exo_settings).setOnClickListener { anchor ->
                         showSettingsMenu(ctx, anchor)
