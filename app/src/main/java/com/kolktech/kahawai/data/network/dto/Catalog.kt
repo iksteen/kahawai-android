@@ -25,6 +25,11 @@ data class Item(
     val episode: Int? = null,
     val parentId: String? = null,
     val parentTitle: String? = null,
+    /// A library this row is in — navigation context, and the only route
+    /// from an item to the media type its preference keys are named after
+    /// (see TrackChoice). Browse rows carry it; the item detail does NOT,
+    /// which is why it travels with the route from here on.
+    val libraryId: String? = null,
     val sources: Int = 0,
     val artVersion: Long? = null,
     val premiered: String? = null,
@@ -48,6 +53,9 @@ data class ChildrenResponse(val children: List<Item>)
 @Serializable
 data class ItemMetadata(
     val overview: String? = null,
+    /// The language the title was made in — `original` in an audio
+    /// wishlist means this (see TrackChoice).
+    val originalLanguage: String? = null,
     val rating: Double? = null,
     val premiered: String? = null,
     val genres: List<String>? = null,

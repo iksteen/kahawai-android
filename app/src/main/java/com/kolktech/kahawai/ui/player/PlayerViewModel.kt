@@ -22,9 +22,11 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,13 +38,24 @@ import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.ApiClient
 import com.kolktech.kahawai.data.network.dto.Chapter
 import com.kolktech.kahawai.data.network.dto.Item
+import com.kolktech.kahawai.data.network.dto.Pref
 import com.kolktech.kahawai.data.network.dto.Segment
 import com.kolktech.kahawai.data.network.dto.StartSessionResponse
 import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import com.kolktech.kahawai.data.network.readableMessage
 import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.data.repository.PlaybackRepository
+import com.kolktech.kahawai.data.repository.PreferencesRepository
 import com.kolktech.kahawai.playback.CapabilityProfileBuilder
+import com.kolktech.kahawai.playback.PREF_AUDIO
+import com.kolktech.kahawai.playback.needsMediaType
+import com.kolktech.kahawai.playback.rememberedAudioValue
+import com.kolktech.kahawai.playback.resolveAudioTrack
+import com.kolktech.kahawai.playback.PREF_SUBS
+import com.kolktech.kahawai.playback.PREF_SUBS_TRACK
+import com.kolktech.kahawai.playback.rememberedSubsTrackValue
+import com.kolktech.kahawai.playback.rememberedSubsValue
+import com.kolktech.kahawai.playback.resolveSubtitleTrack
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
@@ -255,9 +268,16 @@ class PlayerViewModel(
     private val repo: PlaybackRepository,
     val itemId: String,
     private val startMs: Long,
-    private val initialAudioTrack: Int = 0,
+    /// Negative for "nothing chosen" — auto-advance into the next episode
+    /// carries no track, and the remembered preferences answer instead.
+    private val initialAudioTrack: Int = -1,
     private val initialSubtitleTrackId: Long? = null,
+    /// Which library this item was opened from, carried by the route: the
+    /// item's own detail doesn't name one, and without it the account's
+    /// per-media-type track lists can't be found at all — see TrackChoice.
+    private val libraryId: String? = null,
     private val catalogRepo: CatalogRepository = CatalogRepository(),
+    private val prefsRepo: PreferencesRepository = PreferencesRepository(),
 ) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<PlayerState>(PlayerState.Loading)
     val state: StateFlow<PlayerState> = _state
@@ -464,6 +484,15 @@ class PlayerViewModel(
         }
     }
 
+    /// The audio stream every start of this item uses — resolved once from
+    /// the preferences (see start()) and then held, so a recovery restart
+    /// doesn't quietly fall back to track 0.
+    private var audioTrack: Int = initialAudioTrack.coerceAtLeast(0)
+
+    /// The scope track picks are remembered under — see start().
+    private var seriesId: String? = null
+    private var prefsJob: Job? = null
+
     private var session: StartSessionResponse? = null
     private var offsetMs: Long = 0
     private var progressJob: Job? = null
@@ -617,6 +646,22 @@ class PlayerViewModel(
                 // it's swallowed rather than failing the whole start().
                 // One QUERY carries all three (HUB-37: "the subtitle
                 // listing above rides along for the same reason").
+                // Both best-effort and both started before the QUERY they
+                // overlap: a preference that failed to load costs the
+                // remembered subtitle pick, not the session.
+                val prefs = async { runCatching { prefsRepo.all() }.getOrDefault(emptyList()) }
+                // Lazy, unlike the preferences beside it: the media type only
+                // matters for the account's per-type list, which most titles
+                // never reach (see needsMediaType).
+                val libraries = async(start = CoroutineStart.LAZY) {
+                    runCatching { catalogRepo.libraries() }.getOrDefault(emptyList())
+                }
+                suspend fun mediaType(known: List<Pref>): String =
+                    if (needsMediaType(known) && libraryId != null) {
+                        libraries.await().firstOrNull { it.id == libraryId }?.mediaType ?: ""
+                    } else {
+                        ""
+                    }
                 val queried = try {
                     repo.itemQuery(itemId, profile)
                 } catch (e: Exception) {
@@ -627,17 +672,59 @@ class PlayerViewModel(
                 _subtitleTracks.value = tracks
                 _segments.value = queried?.segments ?: emptyList()
                 _chapters.value = queried?.chapters ?: emptyList()
+                // The scope a pick is remembered under (HUB-33): the show,
+                // so every episode of it opens the same way. Falls back to
+                // this item's own id — which is what a film's scope is
+                // anyway, and all an episode whose QUERY failed can offer.
+                seriesId = queried?.parentId ?: itemId
                 // The Detail screen only carries the chosen track's id
                 // through nav args; resolve it against the list once
                 // it's loaded so the picker UI and text-delivery override
                 // both see a real SubtitleTrack, not just its id.
+                //
+                // Nothing carried, or an id this item doesn't have, falls
+                // to the remembered preferences. The second case is the
+                // one that matters: auto-advance carries the track id of
+                // the episode that just ended, and ids don't survive the
+                // file boundary — which is exactly what the series-scoped
+                // language memory is for.
+                if (initialAudioTrack < 0) {
+                    audioTrack = prefs.await().let { known ->
+                        resolveAudioTrack(
+                            prefs = known,
+                            seriesId = seriesId ?: itemId,
+                            itemId = itemId,
+                            mediaType = mediaType(known),
+                            originalLanguage = queried?.metadata?.originalLanguage,
+                            audio = queried?.sources?.firstOrNull()?.streams?.audio ?: emptyList(),
+                        )
+                    }
+                }
                 val initialTrack = tracks.firstOrNull { it.id == initialSubtitleTrackId }
+                    ?: prefs.await().let { known ->
+                        resolveSubtitleTrack(
+                            prefs = known,
+                            seriesId = seriesId ?: itemId,
+                            itemId = itemId,
+                            mediaType = mediaType(known),
+                            tracks = tracks,
+                        )
+                    }
                 _selectedSubtitleTrack.value = initialTrack
+                // Logged like the session start below: which track a title
+                // opens with is preference resolution across three scopes
+                // and a media type the route had to carry, none of which is
+                // visible from the outcome alone.
+                Log.d(
+                    TAG,
+                    "tracks resolved item=$itemId series=$seriesId library=$libraryId " +
+                        "audio=$audioTrack subtitle=${initialTrack?.id} (carried sub=$initialSubtitleTrackId)",
+                )
                 val session = repo.startSession(
                     itemId,
                     profile,
                     startMs,
-                    audioTrack = initialAudioTrack,
+                    audioTrack = audioTrack,
                     subtitleTrack = burnPickOrNull(initialTrack),
                 )
                 this@PlayerViewModel.session = session
@@ -735,7 +822,7 @@ class PlayerViewModel(
                     itemId,
                     profile,
                     positionMs,
-                    audioTrack = initialAudioTrack,
+                    audioTrack = audioTrack,
                     subtitleTrack = burnPickOrNull(_selectedSubtitleTrack.value),
                 )
                 session = newSession
@@ -1004,7 +1091,7 @@ class PlayerViewModel(
                     itemId,
                     profile,
                     positionMs,
-                    audioTrack = initialAudioTrack,
+                    audioTrack = audioTrack,
                     subtitleTrack = subtitleTrackId,
                 )
                 session = newSession
@@ -1352,6 +1439,7 @@ class PlayerViewModel(
     fun selectSubtitleTrack(track: SubtitleTrack?) {
         val previous = _selectedSubtitleTrack.value
         _selectedSubtitleTrack.value = track
+        rememberSubtitlePick(track)
         if (previous?.delivery == "burn" || track?.delivery == "burn") {
             // burnPickOrNull, not track?.id: switching AWAY from a burn
             // to an overlay/text track must start the new session with
@@ -1369,6 +1457,45 @@ class PlayerViewModel(
             // re-prepare path applies the override via onTracksChanged.
             if (track?.delivery == "text") rebakeTextSubtitleShiftIfNeeded()
             applySubtitleTrackSelectionOverride()
+        }
+    }
+
+    /// An audio pick made from the player's own menu, which switches
+    /// ExoPlayer's track selection rather than restarting the session — so
+    /// only the LANGUAGE is remembered here, the layer that carries across
+    /// episodes. The exact-index layer needs the hub's own stream order,
+    /// which the Detail screen's picker has and this menu doesn't. Nothing
+    /// is written for "Default": that's asking to stop steering, not a pick.
+    fun rememberAudioLanguage(language: String?) {
+        val series = seriesId ?: return
+        val value = language?.lowercase()?.takeIf { it.isNotEmpty() } ?: return
+        val previous = prefsJob
+        prefsJob = viewModelScope.launch {
+            previous?.join()
+            runCatching { prefsRepo.put(series, PREF_AUDIO, value) }
+                .onFailure { Log.w(TAG, "failed to remember audio pick item=$itemId", it) }
+        }
+    }
+
+    /// Two memory layers, the same pair the web client writes: the series
+    /// remembers the LANGUAGE, which is what carries into the next episode,
+    /// and this item remembers the exact row, the only spelling that can
+    /// name a downloaded or OCR track.
+    ///
+    /// Fire-and-forget: a remembered pick that didn't save is not worth
+    /// interrupting a film for. Chained rather than launched loose, so two
+    /// picks in quick succession commit in the order they were made — each
+    /// write is whole-state for its key, so the LAST one to land is the one
+    /// that sticks.
+    private fun rememberSubtitlePick(track: SubtitleTrack?) {
+        val series = seriesId ?: return
+        val previous = prefsJob
+        prefsJob = viewModelScope.launch {
+            previous?.join()
+            runCatching {
+                prefsRepo.put(series, PREF_SUBS, rememberedSubsValue(track))
+                prefsRepo.put(itemId, PREF_SUBS_TRACK, rememberedSubsTrackValue(track))
+            }.onFailure { Log.w(TAG, "failed to remember subtitle pick item=$itemId", it) }
         }
     }
 

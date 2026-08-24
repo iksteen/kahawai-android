@@ -97,8 +97,12 @@ private fun Modifier.dpadFocusBorder(shape: Shape = CircleShape): Modifier {
 @Composable
 fun DetailScreen(
     itemId: String,
+    /// Navigation context from the row this was opened from — the item's
+    /// own detail names no library, and its media type is what the
+    /// account's track preferences are keyed by (see TrackChoice).
+    libraryId: String?,
     repo: CatalogRepository,
-    onOpenItem: (String) -> Unit,
+    onOpenItem: (itemId: String, libraryId: String?) -> Unit,
     onPlay: (itemId: String, startMs: Long, audioTrack: Int, subtitleTrackId: Long?) -> Unit,
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
@@ -106,7 +110,7 @@ fun DetailScreen(
     val application = LocalContext.current.applicationContext as Application
     val viewModel: DetailViewModel = viewModel(
         key = itemId,
-        factory = viewModelFactory { initializer { DetailViewModel(application, repo, itemId) } },
+        factory = viewModelFactory { initializer { DetailViewModel(application, repo, itemId, libraryId) } },
     )
     val state by viewModel.state.collectAsState()
     val transientError by viewModel.transientError.collectAsState()
@@ -160,6 +164,7 @@ fun DetailScreen(
                 }
                 DetailContent(
                     state = s,
+                    libraryId = libraryId,
                     repo = repo,
                     onOpenItem = onOpenItem,
                     onPlay = onPlay,
@@ -202,8 +207,9 @@ fun DetailScreen(
 @Composable
 private fun DetailContent(
     state: DetailState.Loaded,
+    libraryId: String?,
     repo: CatalogRepository,
-    onOpenItem: (String) -> Unit,
+    onOpenItem: (itemId: String, libraryId: String?) -> Unit,
     onPlay: (itemId: String, startMs: Long, audioTrack: Int, subtitleTrackId: Long?) -> Unit,
     onSelectAudioTrack: (Int) -> Unit,
     onSelectSubtitleTrack: (SubtitleTrack?) -> Unit,
@@ -286,6 +292,7 @@ private fun DetailContent(
                             ChildRow(
                                 child,
                                 onOpenItem,
+                                libraryId,
                                 focusRequester = if (index == 0) firstChildFocusRequester else null,
                             )
                             HorizontalDivider()
@@ -342,6 +349,7 @@ private fun DetailContent(
                     ChildRow(
                         child,
                         onOpenItem,
+                        libraryId,
                         focusRequester = if (index == 0) firstChildFocusRequester else null,
                     )
                     HorizontalDivider()
@@ -685,7 +693,12 @@ private fun ResumeLine(detail: ItemDetail) {
 }
 
 @Composable
-private fun ChildRow(child: Item, onOpenItem: (String) -> Unit, focusRequester: FocusRequester? = null) {
+private fun ChildRow(
+    child: Item,
+    onOpenItem: (itemId: String, libraryId: String?) -> Unit,
+    libraryId: String?,
+    focusRequester: FocusRequester? = null,
+) {
     var focused by remember { mutableStateOf(false) }
     // Requested from here rather than by the caller: inside a lazy list,
     // a focusRequester isn't attached to anything until this composable
@@ -705,7 +718,9 @@ private fun ChildRow(child: Item, onOpenItem: (String) -> Unit, focusRequester: 
                 width = 2.dp,
                 color = if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
             )
-            .clickable { onOpenItem(child.id) }
+            // Membership runs through the show, so an episode row rarely
+            // names a library of its own — this screen's own answers for it.
+            .clickable { onOpenItem(child.id, child.libraryId ?: libraryId) }
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         val label = if (child.kind == "episode") {
