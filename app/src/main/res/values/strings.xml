@@ -53,10 +53,13 @@
     <string name="detail_chapter_numbered">Chapter %1$d</string>
     <string name="detail_mark_watched">Mark watched</string>
     <string name="detail_mark_unwatched">Mark unwatched</string>
-    <string name="resume_at">Resume at %1$dm</string>
-    <string name="resume_at_percent">Resume at %1$dm (%2$d%%)</string>
+    <string name="resume_at">Resume at %1$s</string>
+    <string name="resume_at_percent">Resume at %1$s (%2$d%%)</string>
     <string name="runtime_hours_minutes">%1$dh %2$dm</string>
+    <string name="runtime_hours">%1$dh</string>
     <string name="runtime_minutes">%1$dm</string>
+    <string name="runtime_seconds">%1$ds</string>
+    <string name="ends_at_format">Ends %1$s</string>
     <string name="channels_mono">Mono</string>
     <string name="channels_stereo">Stereo</string>
 

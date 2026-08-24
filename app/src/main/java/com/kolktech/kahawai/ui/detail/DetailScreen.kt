@@ -76,6 +76,8 @@ import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.ui.components.ErrorView
 import com.kolktech.kahawai.ui.components.OnResumeEffect
 import com.kolktech.kahawai.ui.components.WatchProgressBar
+import com.kolktech.kahawai.util.formatDurationCoarse
+import com.kolktech.kahawai.util.formatEndsAt
 
 /// A thick, high-contrast ring around whatever holds D-pad focus. The
 /// default Material focus indication is nearly invisible from couch
@@ -386,9 +388,13 @@ private fun DetailInfo(
         Text(meta, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
     }
 
+    // Remaining, not the full runtime: resuming partway through should
+    // still point at when playback would actually finish if started now.
+    val remainingMs = runtimeMs?.minus(detail.resumePositionMs?.coerceAtLeast(0) ?: 0)?.coerceAtLeast(0)
     val facts = listOfNotNull(
         detail.metadata?.rating?.takeIf { it > 0 }?.let { "★ %.1f".format(it) },
-        runtimeMs?.takeIf { it > 0 }?.let { formatRuntime(it) },
+        runtimeMs?.takeIf { it > 0 }?.let { formatDurationCoarse(it) },
+        remainingMs?.takeIf { it > 0 }?.let { formatEndsAt(it) },
         videoStream?.resolutionLabel(),
         videoStream?.let { it.codec.uppercase() },
         videoStream?.hdr?.uppercase(),
@@ -637,18 +643,6 @@ private fun SelectableRow(text: String, selected: Boolean, enabled: Boolean = tr
     }
 }
 
-@Composable
-private fun formatRuntime(ms: Long): String {
-    val totalMinutes = ms / 60_000
-    val hours = totalMinutes / 60
-    val minutes = totalMinutes % 60
-    return if (hours > 0) {
-        stringResource(R.string.runtime_hours_minutes, hours, minutes)
-    } else {
-        stringResource(R.string.runtime_minutes, minutes)
-    }
-}
-
 private fun VideoStreamInfo.resolutionLabel(): String = when {
     height >= 2160 -> "4K"
     height >= 1080 -> "1080p"
@@ -678,11 +672,11 @@ private fun ResumeLine(detail: ItemDetail) {
     val text = when {
         detail.played -> stringResource(R.string.watched)
         resumeMs != null && resumeMs > 0 -> {
-            val minutes = resumeMs / 60_000
+            val elapsed = formatDurationCoarse(resumeMs)
             if (durationMs != null && durationMs > 0) {
-                stringResource(R.string.resume_at_percent, minutes, resumeMs * 100 / durationMs)
+                stringResource(R.string.resume_at_percent, elapsed, resumeMs * 100 / durationMs)
             } else {
-                stringResource(R.string.resume_at, minutes)
+                stringResource(R.string.resume_at, elapsed)
             }
         }
         else -> null

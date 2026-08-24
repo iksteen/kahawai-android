@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -95,6 +96,7 @@ import com.kolktech.kahawai.data.settings.AppSettingsStore
 import com.kolktech.kahawai.ui.MainActivity
 import com.kolktech.kahawai.ui.player.subtitle.AssSubtitleOverlay
 import com.kolktech.kahawai.ui.player.subtitle.ImageSubtitleOverlay
+import com.kolktech.kahawai.util.formatEndsAt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1184,6 +1186,30 @@ private fun PlayerContent(
         // push updates into it from composition.
         LaunchedEffect(title, playerView) {
             playerView?.findViewById<TextView>(R.id.kw_player_title)?.text = title.orEmpty()
+        }
+
+        // Like kw_player_title, exo_position/exo_duration are refreshed by
+        // media3-ui itself, but kw_ends_at needs its own push - and only
+        // bothers while the controls (and thus the label) are visible.
+        // Position/duration are read imperatively off the player, same as
+        // the skip-check loop above, rather than off a StateFlow that
+        // doesn't exist for them (see PlayerViewModel).
+        LaunchedEffect(controlsShown, playerView) {
+            if (!controlsShown) return@LaunchedEffect
+            while (true) {
+                val duration = viewModel.player.duration
+                val remainingMs = if (duration > 0 && duration != C.TIME_UNSET) {
+                    (duration - viewModel.player.currentPosition).coerceAtLeast(0)
+                } else {
+                    null
+                }
+                playerView?.findViewById<TextView>(R.id.kw_ends_at)?.apply {
+                    isVisible = remainingMs != null
+                    remainingMs?.let { text = formatEndsAt(context, it) }
+                }
+                playerView?.findViewById<View>(R.id.kw_ends_at_separator)?.isVisible = remainingMs != null
+                delay(5_000)
+            }
         }
 
         // kw_prev/kw_next (see kw_player_control_view.xml for why they're

@@ -85,6 +85,20 @@
         <TextView android:id="@id/exo_duration"
             style="@style/ExoStyledControls.TimeText.Duration"/>
 
+        <TextView android:id="@+id/kw_ends_at_separator"
+            style="@style/ExoStyledControls.TimeText.Separator"
+            android:visibility="gone"/>
+
+        <!-- Populated/refreshed from PlayerScreen's AndroidView effects
+             (see kw_ends_at handling there) - media3-ui only knows how to
+             fill exo_position/exo_duration itself. Starts empty/gone so
+             live streams (no known duration) never show a dangling
+             separator with nothing after it. -->
+        <TextView android:id="@+id/kw_ends_at"
+            style="@style/ExoStyledControls.TimeText.Duration"
+            android:text=""
+            android:visibility="gone"/>
+
       </LinearLayout>
 
     </LinearLayout>
