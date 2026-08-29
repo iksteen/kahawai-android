@@ -59,8 +59,11 @@ class HomeViewModelTest {
         """{"items":[{"id":"i1","kind":"movie","title":"$title"}],"total":1,"limit":20,"offset":0}""",
     )
 
+    private val emptyUpNext = MockResponse().setBody("""{"items":[],"total":0,"limit":12,"offset":0}""")
+
     private fun homeDispatcher(libraryResponse: MockResponse) = routeBy(
         { r: RecordedRequest -> r.path?.contains("in_progress=true") == true } to noneInProgress,
+        { r: RecordedRequest -> r.path?.startsWith("/api/v1/up-next") == true } to emptyUpNext,
         { r: RecordedRequest -> r.path == "/api/v1/libraries" } to oneLibrary,
         { r: RecordedRequest -> r.path?.contains("library=lib1") == true } to libraryResponse,
     )
@@ -77,6 +80,29 @@ class HomeViewModelTest {
             val loaded = item as HomeState.Loaded
             assertEquals(1, loaded.rows.size)
             assertEquals("Arrival", loaded.rows[0].items[0].title)
+        }
+    }
+
+    @Test
+    fun `load surfaces up-next episodes alongside library rows`() = runTest {
+        val upNext = MockResponse().setBody(
+            """{"items":[{"id":"e2","kind":"episode","title":"Ep 2"}],"total":1,"limit":12,"offset":0}""",
+        )
+        server.dispatcher = routeBy(
+            { r: RecordedRequest -> r.path?.contains("in_progress=true") == true } to noneInProgress,
+            { r: RecordedRequest -> r.path?.startsWith("/api/v1/up-next") == true } to upNext,
+            { r: RecordedRequest -> r.path == "/api/v1/libraries" } to oneLibrary,
+            { r: RecordedRequest -> r.path?.contains("library=lib1") == true } to libraryItems("Arrival"),
+        )
+
+        val viewModel = HomeViewModel(repo())
+
+        viewModel.state.test {
+            var item = awaitItem()
+            if (item is HomeState.Loading) item = awaitItem()
+            val loaded = item as HomeState.Loaded
+            assertEquals(1, loaded.upNext.size)
+            assertEquals("Ep 2", loaded.upNext[0].title)
         }
     }
 

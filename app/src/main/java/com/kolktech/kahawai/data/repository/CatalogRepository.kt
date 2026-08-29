@@ -34,6 +34,12 @@ class CatalogRepository(apiProvider: () -> ApiService = { ApiClient.apiService()
         offset: Int? = null,
     ): ItemsResponse = api.items(library, q, sort, inProgress, limit, offset)
 
+    suspend fun upNext(
+        library: String? = null,
+        limit: Int? = null,
+        offset: Int? = null,
+    ): ItemsResponse = api.upNext(library, limit, offset)
+
     suspend fun item(id: String): ItemDetail = api.item(id)
 
     /// The item viewer's call: what this client would actually be
