@@ -59,6 +59,11 @@ fun ContinueWatchingCard(
     onClick: (String) -> Unit,
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
+    /// Off for the up-next row: those items are, by construction, not
+    /// meaningfully started (a series with one is in continue-watching
+    /// instead — see api.rs `up_next_from`), so a bar would only ever
+    /// draw at 0%.
+    showProgress: Boolean = true,
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) 1.04f else 1f, label = "continueWatchingFocusScale")
@@ -110,12 +115,14 @@ fun ContinueWatchingCard(
                     modifier = Modifier.size(14.dp),
                 )
             }
-            WatchProgressBar(
-                positionMs = item.resumePositionMs,
-                durationMs = item.resumeDurationMs,
-                played = item.played,
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
+            if (showProgress) {
+                WatchProgressBar(
+                    positionMs = item.resumePositionMs,
+                    durationMs = item.resumeDurationMs,
+                    played = item.played,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
         }
         Text(
             item.continueWatchingTitle(),

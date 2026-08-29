@@ -68,6 +68,17 @@ interface ApiService {
         @Query("offset") offset: Int? = null,
     ): ItemsResponse
 
+    /// The episode after the last one finished, one per current series —
+    /// the home screen's up-next row (api.rs `up_next`, HUB's
+    /// "Add the up-next row"). Its own order (most recently watched series
+    /// first), so there is no `sort`/`q`; `library` still scopes it.
+    @GET("api/v1/up-next")
+    suspend fun upNext(
+        @Query("library") library: String? = null,
+        @Query("limit") limit: Int? = null,
+        @Query("offset") offset: Int? = null,
+    ): ItemsResponse
+
     /// "What did we find" — sources without stream info, no negotiation.
     @GET("api/v1/items/{id}")
     suspend fun item(@Path("id") id: String): ItemDetail

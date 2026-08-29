@@ -159,7 +159,7 @@ fun HomeScreen(
                 )
                 is HomeState.Loaded -> {
                     val content: @Composable BoxScope.() -> Unit = {
-                        if (s.rows.isEmpty() && s.continueWatching.isEmpty()) {
+                        if (s.rows.isEmpty() && s.continueWatching.isEmpty() && s.upNext.isEmpty()) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text(stringResource(R.string.home_no_libraries))
                             }
@@ -216,6 +216,34 @@ fun HomeScreen(
                                             )
                                         }
                                     }
+                                    // The episode after the last one finished, one per
+                                    // current series — mirrors web/src/views/Home.vue's
+                                    // "Up next" row. No progress bar: see
+                                    // ContinueWatchingCard's showProgress doc.
+                                    if (s.upNext.isNotEmpty()) {
+                                        item(key = "up-next-header") {
+                                            UpNextHeader()
+                                        }
+                                        itemsIndexed(
+                                            s.upNext.chunked(continueWatchingColumns),
+                                            key = { _, chunk -> "up-next-${chunk.first().id}" },
+                                        ) { chunkIndex, chunk ->
+                                            ContinueWatchingGridRow(
+                                                chunk,
+                                                continueWatchingColumns,
+                                                repo,
+                                                onOpenItem,
+                                                firstItemFocusRequester = if (s.continueWatching.isEmpty() &&
+                                                    chunkIndex == 0
+                                                ) {
+                                                    firstItemFocusRequester
+                                                } else {
+                                                    null
+                                                },
+                                                showProgress = false,
+                                            )
+                                        }
+                                    }
                                     s.rows.forEachIndexed { rowIndex, row ->
                                         item(key = "${row.library.id}-header") {
                                             LibraryHeader(row, onOpenLibrary)
@@ -230,6 +258,7 @@ fun HomeScreen(
                                                 repo,
                                                 onOpenItem,
                                                 firstItemFocusRequester = if (s.continueWatching.isEmpty() &&
+                                                    s.upNext.isEmpty() &&
                                                     rowIndex == 0 &&
                                                     chunkIndex == 0
                                                 ) {
@@ -286,6 +315,20 @@ private fun ContinueWatchingHeader() {
     )
 }
 
+/// No "see all" and no [onOpenLibrary] target, same reasoning as
+/// [ContinueWatchingHeader] — up-next is cross-library with no library of
+/// its own, see [HomeState.Loaded.upNext].
+@Composable
+private fun UpNextHeader() {
+    Text(
+        stringResource(R.string.home_up_next),
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier.fillMaxWidth().padding(top = 20.dp, start = 16.dp, end = 16.dp, bottom = 8.dp),
+    )
+}
+
 @Composable
 private fun LibraryHeader(
     row: LibraryRow,
@@ -327,6 +370,7 @@ private fun ContinueWatchingGridRow(
     repo: CatalogRepository,
     onOpenItem: (itemId: String, libraryId: String?) -> Unit,
     firstItemFocusRequester: FocusRequester? = null,
+    showProgress: Boolean = true,
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(GRID_SPACING),
@@ -339,6 +383,7 @@ private fun ContinueWatchingGridRow(
                 { id -> onOpenItem(id, item.libraryId) },
                 modifier = Modifier.weight(1f),
                 focusRequester = if (index == 0) firstItemFocusRequester else null,
+                showProgress = showProgress,
             )
         }
         repeat(columns - chunk.size) {
