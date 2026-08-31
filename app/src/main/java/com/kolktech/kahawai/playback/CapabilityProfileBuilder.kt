@@ -6,6 +6,9 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.view.Display
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import com.kolktech.kahawai.data.network.dto.CapabilityProfile
 import com.kolktech.kahawai.data.network.dto.TargetDuration
 import com.kolktech.kahawai.data.network.dto.VideoCap
@@ -43,7 +46,6 @@ object CapabilityProfileBuilder {
 
         val display = context.getSystemService(DisplayManager::class.java)
             ?.getDisplay(Display.DEFAULT_DISPLAY)
-        val metrics = context.resources.displayMetrics
         val hdr = display?.let(::supportsHdr) == true
 
         return CapabilityProfile(
@@ -54,7 +56,7 @@ object CapabilityProfileBuilder {
             // Android's audio pipeline downmixes multichannel itself, so
             // capping here would just force an avoidable re-encode.
             maxAudioChannels = 0,
-            maxHeight = max(metrics.widthPixels, metrics.heightPixels),
+            maxHeight = maxDisplayHeight(context, display),
             maxFps = display?.refreshRate?.roundToInt(),
             hdr = hdr,
             maxBandwidthKbps = null,
@@ -75,6 +77,32 @@ object CapabilityProfileBuilder {
             // `Ignore`.
             targetDuration = TargetDuration.Accurate,
         )
+    }
+
+    /// `resources.displayMetrics` is the *rendered* UI size, not the HDMI
+    /// output size. Android TV boxes routinely compose the UI at 1080p and
+    /// let SurfaceFlinger hardware-scale to a 2160p link — an NVIDIA Shield
+    /// on a 4K panel reports 1920x1080 there while decoding and outputting
+    /// 4K video perfectly well, so probing it under-claims by a factor of
+    /// two and the hub transcodes down for nothing. Media3's
+    /// `Util.getCurrentDisplayModeSize` reads the physical mode instead
+    /// (`Display.Mode.getPhysicalWidth/Height` on API 28+, the
+    /// `sys.display-size`/`vendor.display-size` TV properties below that),
+    /// which is the same size ExoPlayer itself uses to pick a video track.
+    /// Still the larger dimension, so the answer does not depend on which
+    /// way a handset happens to be held.
+    @OptIn(UnstableApi::class)
+    private fun maxDisplayHeight(context: Context, display: Display?): Int? {
+        val size = runCatching {
+            if (display != null) {
+                Util.getCurrentDisplayModeSize(context, display)
+            } else {
+                Util.getCurrentDisplayModeSize(context)
+            }
+        }.getOrNull()
+        if (size != null && size.x > 0 && size.y > 0) return max(size.x, size.y)
+        val metrics = context.resources.displayMetrics
+        return max(metrics.widthPixels, metrics.heightPixels)
     }
 
     /// `Display.Mode.getSupportedHdrTypes()` (API 34+) replaced the
