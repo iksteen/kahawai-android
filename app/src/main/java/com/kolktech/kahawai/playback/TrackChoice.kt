@@ -41,7 +41,7 @@ internal fun needsMediaType(prefs: List<Pref>): Boolean =
     prefs.any { it.scope == "" && (it.key.startsWith("$PREF_SUBS.") || it.key.startsWith("$PREF_AUDIO.")) }
 
 /// Two letters is a match: `en` and `eng` and `en-GB` are the same wish.
-private fun langEq(have: String?, want: String): Boolean {
+internal fun langEq(have: String?, want: String): Boolean {
     if (have.isNullOrEmpty()) return false
     val a = have.lowercase()
     val b = want.lowercase()
@@ -96,7 +96,7 @@ internal fun rememberedAudioValue(track: AudioStreamInfo?, index: Int): String =
     track?.language?.lowercase()?.takeIf { it.isNotEmpty() } ?: "#$index"
 
 /// A bitmap track: its cues are pictures, not text.
-private val IMAGE_FORMATS = setOf("pgs", "vobsub", "dvdsub")
+internal val IMAGE_FORMATS = setOf("pgs", "vobsub", "dvdsub")
 
 /// Deliveries this client renders itself. A wishlist never auto-picks a
 /// burn: that's a server-side video encode, which is not what "I watch this

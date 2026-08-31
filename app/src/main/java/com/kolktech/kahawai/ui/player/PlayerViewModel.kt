@@ -47,7 +47,9 @@ import com.kolktech.kahawai.data.repository.CatalogRepository
 import com.kolktech.kahawai.data.repository.PlaybackRepository
 import com.kolktech.kahawai.data.repository.PreferencesRepository
 import com.kolktech.kahawai.playback.CapabilityProfileBuilder
+import com.kolktech.kahawai.playback.IMAGE_FORMATS
 import com.kolktech.kahawai.playback.PREF_AUDIO
+import com.kolktech.kahawai.playback.langEq
 import com.kolktech.kahawai.playback.needsMediaType
 import com.kolktech.kahawai.playback.rememberedAudioValue
 import com.kolktech.kahawai.playback.resolveAudioTrack
@@ -178,6 +180,70 @@ internal fun computeOriginCorrection(
 /// strip that prefix rather than compare exactly.
 internal fun matchesSideloadedTrackId(formatId: String?, wantedId: String): Boolean =
     formatId?.substringAfterLast(':') == wantedId
+
+/// The sample MIME types a bitmap subtitle track can reach the player's
+/// own track list as. Two spellings, because media3 parses subtitles at
+/// EXTRACTION time now: SubtitleTranscodingTrackOutput rewrites the
+/// format's sampleMimeType to `application/x-media3-cues` and moves the
+/// real one down into `codecs`, so a track matched on sampleMimeType
+/// alone would never be found in a progressive (direct) source.
+internal val NATIVE_BITMAP_SUBTITLE_MIMES = setOf(MimeTypes.APPLICATION_VOBSUB, MimeTypes.APPLICATION_PGS)
+
+/// One of the player's own text track groups, cut down to what can
+/// identify it — see [nativeBitmapGroupIndex].
+internal data class TextTrackInfo(val mimeType: String?, val codecs: String?, val language: String?)
+
+/// Whether media3's own decoder renders this pick, rather than
+/// [ImageSubtitleOverlay]. "overlay" delivery normally means the hub
+/// decodes the display sets and streams them as a session tap — but a
+/// "direct" session is a raw byte-range file with no server-side
+/// pipeline to tap, and the item-scoped whole-file route only answers
+/// for origin=="raster", so for a genuine embedded track that source
+/// simply doesn't exist. What a direct session does have is ExoPlayer
+/// demuxing the container itself, and media3 ships parsers for both
+/// bitmap formats that arrive that way (VobsubParser, PgsParser) — so
+/// the track is already in the player's own text groups, wanting only
+/// to be selected. Its cues then draw in PlayerView's SubtitleView,
+/// which fills exo_content_frame and so lands them on the video the
+/// same way the overlay would.
+internal fun isNativeBitmapPick(track: SubtitleTrack?, isDirect: Boolean): Boolean =
+    isDirect &&
+        track != null &&
+        track.delivery == "overlay" &&
+        track.origin == "embedded" &&
+        track.format.lowercase() in IMAGE_FORMATS
+
+/// Where [pick] sits among the bitmap tracks the container itself
+/// carries. The hub's listing is wider than the file — sidecars,
+/// downloads and OCR rows are in it too — while the extractor only ever
+/// sees what's muxed in, so the two only line up once everything else is
+/// filtered out and what's left is in the file's own stream order. Null
+/// when [pick] isn't one of them.
+internal fun embeddedBitmapOrdinal(tracks: List<SubtitleTrack>, pick: SubtitleTrack): Int? =
+    tracks
+        .filter { it.origin == "embedded" && it.format.lowercase() in IMAGE_FORMATS }
+        .sortedBy { it.streamIndex ?: Long.MAX_VALUE }
+        .indexOfFirst { it.id == pick.id }
+        .takeIf { it >= 0 }
+
+/// Which of the player's text groups is the pick, indexing into [groups]
+/// as given (group order). Language decides whenever it can single a
+/// track out — it's the one field both listings spell the same way, and
+/// it survives a container whose track numbering doesn't match the hub's
+/// stream indices. Position among the bitmap groups is the fallback, for
+/// a file whose tracks declare no language or declare the same one
+/// twice. Null when the container turned out not to carry a bitmap track
+/// at all.
+internal fun nativeBitmapGroupIndex(groups: List<TextTrackInfo>, ordinal: Int, language: String?): Int? {
+    val candidates = groups.withIndex().filter {
+        it.value.mimeType in NATIVE_BITMAP_SUBTITLE_MIMES || it.value.codecs in NATIVE_BITMAP_SUBTITLE_MIMES
+    }
+    if (candidates.isEmpty()) return null
+    if (!language.isNullOrEmpty()) {
+        candidates.singleOrNull { langEq(it.value.language, language) }?.let { return it.index }
+    }
+    return candidates.getOrNull(ordinal)?.index
+}
 
 /// See [PlayerViewModel.textDeliverySubtitleConfigs]. shift_ms is negative
 /// offsetMs: the hub shifts the VTT's own cue timestamps to line up with
@@ -1407,19 +1473,39 @@ class PlayerViewModel(
             }
 
     /// Reapplies the current [selectedSubtitleTrack] as a
-    /// TrackSelectionOverride against whatever sideloaded text tracks the
+    /// TrackSelectionOverride against whatever text tracks the
     /// just-rebuilt MediaItem carries. A no-op (override cleared) unless
-    /// the selection is itself Text delivery — Ass/Overlay tracks are
-    /// never part of ExoPlayer's own track groups.
+    /// the selection is one this pipeline renders: a Text-delivery track
+    /// (sideloaded VTT) or an embedded bitmap track a direct session
+    /// hands straight to media3's own parsers ([isNativeBitmapPick]).
+    /// Ass delivery, and overlay delivery in every other shape, are read
+    /// out of band and are never part of ExoPlayer's track groups.
     private fun applySubtitleTrackSelectionOverride() {
-        val textTrack = _selectedSubtitleTrack.value?.takeIf { it.delivery == "text" }
+        val selected = _selectedSubtitleTrack.value
+        val textTrack = selected?.takeIf { it.delivery == "text" }
+        val bitmapTrack = selected?.takeIf { isNativeBitmapPick(it, session?.mode == "direct") }
         val params = realPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-            // Disabled unless a Text pick is live — see the ExoPlayer.Builder
-            // note above: leaving the renderer enabled lets the selector pick
-            // a text track we never asked for.
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textTrack == null)
-        if (textTrack != null) {
+            // Disabled unless a pick this pipeline renders is live — see the
+            // ExoPlayer.Builder note above: leaving the renderer enabled lets
+            // the selector pick a text track we never asked for.
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textTrack == null && bitmapTrack == null)
+        if (bitmapTrack != null) {
+            // Found by what it IS, not by an id: this track came out of the
+            // file itself, so there's no sideloaded id to match on and the
+            // container's own numbering need not agree with the hub's stream
+            // indices. See nativeBitmapGroupIndex.
+            val groups = realPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+            val infos = groups.map {
+                val format = it.mediaTrackGroup.getFormat(0)
+                TextTrackInfo(format.sampleMimeType, format.codecs, format.language)
+            }
+            val index = embeddedBitmapOrdinal(_subtitleTracks.value, bitmapTrack)
+                ?.let { ordinal -> nativeBitmapGroupIndex(infos, ordinal, bitmapTrack.language) }
+            // Log.i for the same reason as the text override below.
+            Log.i(TAG, "bitmap override: want=${bitmapTrack.id} matched=${index != null} textGroups=$infos")
+            if (index != null) params.addOverride(TrackSelectionOverride(groups[index].mediaTrackGroup, 0))
+        } else if (textTrack != null) {
             // MergingMediaPeriod re-exposes every child source's formats
             // with the id rewritten to "<childIndex>:<originalId>"
             // (uniqueness across children — confirmed in 1.10.0
