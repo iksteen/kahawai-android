@@ -3,6 +3,7 @@ package com.kolktech.kahawai.ui.player
 import android.graphics.Color
 import androidx.media3.ui.CaptionStyleCompat
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /// Locks the intent: an outline, and nothing painted behind the glyphs.
@@ -22,5 +23,29 @@ class TextSubtitleStyleTest {
     @Test
     fun `it is not media3's white-on-black default`() {
         assertEquals(Color.BLACK, CaptionStyleCompat.DEFAULT.backgroundColor)
+    }
+}
+
+/// The HDR variant. Cues live in the SDR UI layer that the compositor maps
+/// into the HDR signal, so full-scale white is not paper white — it rides
+/// up with the picture's headroom.
+class HdrTextSubtitleStyleTest {
+
+    @Test
+    fun `hdr glyphs sit at BT2408 reference white, not full scale`() {
+        // Opaque 0xBFBFBFBF-grey: 191/255 = 75%.
+        assertEquals(0xFFBFBFBF.toInt(), TEXT_SUBTITLE_STYLE_HDR.foregroundColor)
+    }
+
+    @Test
+    fun `it is dimmer than the SDR style but otherwise identical`() {
+        assertTrue(
+            (TEXT_SUBTITLE_STYLE_HDR.foregroundColor and 0xFF) <
+                (TEXT_SUBTITLE_STYLE.foregroundColor and 0xFF),
+        )
+        assertEquals(TEXT_SUBTITLE_STYLE.edgeType, TEXT_SUBTITLE_STYLE_HDR.edgeType)
+        assertEquals(TEXT_SUBTITLE_STYLE.edgeColor, TEXT_SUBTITLE_STYLE_HDR.edgeColor)
+        assertEquals(TEXT_SUBTITLE_STYLE.backgroundColor, TEXT_SUBTITLE_STYLE_HDR.backgroundColor)
+        assertEquals(TEXT_SUBTITLE_STYLE.windowColor, TEXT_SUBTITLE_STYLE_HDR.windowColor)
     }
 }

@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -245,6 +246,31 @@ internal fun nativeBitmapGroupIndex(groups: List<TextTrackInfo>, ordinal: Int, l
     return candidates.getOrNull(ordinal)?.index
 }
 
+/// The video format actually being rendered, out of the player's own
+/// track list. Null before the first selection, and for an audio-only
+/// item.
+internal fun selectedVideoFormat(tracks: Tracks): Format? =
+    tracks.groups
+        .firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }
+        ?.let { group -> (0 until group.length).firstOrNull(group::isTrackSelected)?.let(group::getTrackFormat) }
+
+/// Whether [format] carries one of the two HDR transfer functions. Both
+/// are checked because the hub serves either: PQ (ST 2084) for HDR10 and
+/// Dolby Vision profiles that fall back to it, HLG for broadcast-sourced
+/// material.
+///
+/// The colour PRIMARIES are deliberately not consulted. BT.2020 primaries
+/// with an SDR transfer is a wide-gamut SDR picture, which needs no
+/// dimming, and tone-mapped output keeps its primaries while losing the
+/// transfer — so the transfer is the field that says whether the panel is
+/// being driven in HDR.
+@OptIn(UnstableApi::class)
+internal fun isHdrTransfer(format: Format?): Boolean =
+    when (format?.colorInfo?.colorTransfer) {
+        C.COLOR_TRANSFER_ST2084, C.COLOR_TRANSFER_HLG -> true
+        else -> false
+    }
+
 /// See [PlayerViewModel.textDeliverySubtitleConfigs]. shift_ms is negative
 /// offsetMs: the hub shifts the VTT's own cue timestamps to line up with
 /// the player's absolute position, which is offsetMs AHEAD of the file's
@@ -394,6 +420,16 @@ class PlayerViewModel(
     /// PlayerScreen closes the player as soon as it's set, landing back on
     /// the detail screen already underneath it on the back stack instead of
     /// leaving playback sitting on a frozen/black final frame.
+    /// Whether the video being played is HDR — see [isHdrTransfer] and
+    /// [TEXT_SUBTITLE_STYLE_HDR]. Read off the selected video track rather
+    /// than the item's catalogue facts, because it has to follow what is
+    /// ACTUALLY on the wire: the hub tone maps to SDR when this client's
+    /// profile says it cannot take HDR, and the same item can therefore
+    /// play either way on different devices, or across a session restart
+    /// that renegotiated.
+    private val _hdrActive = MutableStateFlow(false)
+    val hdrActive: StateFlow<Boolean> = _hdrActive
+
     private val _playbackFinished = MutableStateFlow(false)
     val playbackFinished: StateFlow<Boolean> = _playbackFinished
 
@@ -697,6 +733,7 @@ class PlayerViewModel(
             /// (a plain post-prepare() call would silently see no groups yet).
             override fun onTracksChanged(tracks: Tracks) {
                 applySubtitleTrackSelectionOverride()
+                _hdrActive.value = isHdrTransfer(selectedVideoFormat(tracks))
             }
         })
         start()
