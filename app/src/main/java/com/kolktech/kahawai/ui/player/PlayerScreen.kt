@@ -1156,15 +1156,23 @@ private fun PlayerContent(
         val activeSession = subtitleSession
         if (activeSession != null) {
             when (selectedSubtitle?.delivery) {
-                "overlay" -> ImageSubtitleOverlay(
-                    player = viewModel.player,
-                    itemId = viewModel.itemId,
-                    track = selectedSubtitle!!,
-                    subtitleSession = activeSession,
-                    resizeMode = RESIZE_MODES[resizeModeIndex].first,
-                    bottomInsetPx = cueInsetPx,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                // An embedded bitmap track in a direct session is the one
+                // "overlay" pick this composable can't serve — there's no
+                // session pipeline to tap for its display sets. media3
+                // decodes that one out of the container itself and draws it
+                // in PlayerView's own SubtitleView instead, the same as
+                // "text" below (see isNativeBitmapPick).
+                "overlay" -> if (!isNativeBitmapPick(selectedSubtitle, isDirect = !activeSession.isHls)) {
+                    ImageSubtitleOverlay(
+                        player = viewModel.player,
+                        itemId = viewModel.itemId,
+                        track = selectedSubtitle!!,
+                        subtitleSession = activeSession,
+                        resizeMode = RESIZE_MODES[resizeModeIndex].first,
+                        bottomInsetPx = cueInsetPx,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 "ass" -> AssSubtitleOverlay(
                     player = viewModel.player,
                     itemId = viewModel.itemId,

@@ -177,7 +177,12 @@ fun ImageSubtitleOverlay(
         // origin=="raster" (crates/kahawai-hub/src/api.rs
         // item_subtitle_file) — so Direct mode simply has no source for
         // it; connecting anyway would just retry a tap that provably
-        // never produces anything.
+        // never produces anything. That case doesn't reach this
+        // composable any more (PlayerScreen routes it to media3's own
+        // in-container decoding — see isNativeBitmapPick), so what's left
+        // here is genuinely sourceless: an unrecognised origin, or a
+        // direct session serving a container media3 can't demux the track
+        // out of.
         val (url, maxAttempts) = when {
             track.origin == "raster" ->
                 "${ApiClient.baseUrl().trimEnd('/')}/api/v1/items/$itemId/subtitles/${track.id}.jsonl" to 1

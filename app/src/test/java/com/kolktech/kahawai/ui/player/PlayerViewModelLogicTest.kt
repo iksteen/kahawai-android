@@ -5,6 +5,7 @@ import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.dto.Chapter
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.network.dto.Segment
+import com.kolktech.kahawai.data.network.dto.SubtitleTrack
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -12,6 +13,23 @@ import org.junit.Test
 class PlayerViewModelLogicTest {
 
     private fun episode(id: String) = Item(id = id, kind = "episode", title = id)
+
+    private fun subtitle(
+        id: Long,
+        origin: String = "embedded",
+        format: String = "vobsub",
+        delivery: String = "overlay",
+        language: String? = "en",
+        streamIndex: Long? = null,
+    ) = SubtitleTrack(
+        id = id,
+        itemId = "ep1",
+        origin = origin,
+        streamIndex = streamIndex,
+        format = format,
+        language = language,
+        delivery = delivery,
+    )
 
     // resumePlan
 
@@ -357,5 +375,109 @@ class PlayerViewModelLogicTest {
     fun `no marks when duration is unknown`() {
         val chapters = listOf(Chapter(startMs = 60_000))
         assertEquals(0, chapterMarkTimesMs(chapters, durationMs = 0).size)
+    }
+
+    // isNativeBitmapPick
+
+    @Test
+    fun `an embedded bitmap track in a direct session decodes in-player`() {
+        assertEquals(true, isNativeBitmapPick(subtitle(1), isDirect = true))
+        assertEquals(true, isNativeBitmapPick(subtitle(1, format = "pgs"), isDirect = true))
+        assertEquals(true, isNativeBitmapPick(subtitle(1, format = "dvdsub"), isDirect = true))
+    }
+
+    @Test
+    fun `an hls session keeps the session tap`() {
+        assertEquals(false, isNativeBitmapPick(subtitle(1), isDirect = false))
+    }
+
+    @Test
+    fun `a raster track keeps its own item-scoped source`() {
+        assertEquals(false, isNativeBitmapPick(subtitle(1, origin = "raster"), isDirect = true))
+    }
+
+    @Test
+    fun `text and ass deliveries are untouched`() {
+        assertEquals(false, isNativeBitmapPick(subtitle(1, format = "srt", delivery = "text"), isDirect = true))
+        assertEquals(false, isNativeBitmapPick(subtitle(1, format = "ass", delivery = "ass"), isDirect = true))
+        assertEquals(false, isNativeBitmapPick(null, isDirect = true))
+    }
+
+    // embeddedBitmapOrdinal
+
+    @Test
+    fun `counts only the bitmap tracks the container carries, in stream order`() {
+        val second = subtitle(7, streamIndex = 4, language = "nl")
+        val tracks = listOf(
+            subtitle(1, origin = "sidecar", format = "srt", delivery = "text", streamIndex = null),
+            second,
+            subtitle(9, format = "srt", delivery = "text", streamIndex = 2),
+            subtitle(3, streamIndex = 3),
+        )
+        assertEquals(0, embeddedBitmapOrdinal(tracks, tracks.first { it.id == 3L }))
+        assertEquals(1, embeddedBitmapOrdinal(tracks, second))
+    }
+
+    @Test
+    fun `a track the container does not carry has no ordinal`() {
+        val downloaded = subtitle(5, origin = "downloaded", format = "srt", delivery = "text")
+        assertNull(embeddedBitmapOrdinal(listOf(subtitle(1, streamIndex = 2), downloaded), downloaded))
+    }
+
+    // nativeBitmapGroupIndex
+
+    @Test
+    fun `finds a bitmap group behind the extraction-time cues mime`() {
+        val groups = listOf(
+            TextTrackInfo("text/vtt", null, "en"),
+            TextTrackInfo("application/x-media3-cues", "application/vobsub", "nl"),
+        )
+        assertEquals(1, nativeBitmapGroupIndex(groups, ordinal = 0, language = "nl"))
+    }
+
+    @Test
+    fun `finds a bitmap group declared with its own mime`() {
+        val groups = listOf(TextTrackInfo("application/pgs", null, "en"))
+        assertEquals(0, nativeBitmapGroupIndex(groups, ordinal = 0, language = "en"))
+    }
+
+    @Test
+    fun `language wins over position when it singles a track out`() {
+        val groups = listOf(
+            TextTrackInfo("application/vobsub", null, "eng"),
+            TextTrackInfo("application/vobsub", null, "nld"),
+        )
+        assertEquals(1, nativeBitmapGroupIndex(groups, ordinal = 0, language = "nl"))
+    }
+
+    @Test
+    fun `position decides between two tracks of the same language`() {
+        val groups = listOf(
+            TextTrackInfo("application/vobsub", null, "en"),
+            TextTrackInfo("application/vobsub", null, "en"),
+        )
+        assertEquals(1, nativeBitmapGroupIndex(groups, ordinal = 1, language = "en"))
+    }
+
+    @Test
+    fun `position decides when the container declares no language`() {
+        val groups = listOf(
+            TextTrackInfo("text/vtt", null, "en"),
+            TextTrackInfo("application/vobsub", null, null),
+        )
+        assertEquals(1, nativeBitmapGroupIndex(groups, ordinal = 0, language = "en"))
+    }
+
+    @Test
+    fun `no bitmap group means no match`() {
+        val groups = listOf(TextTrackInfo("text/vtt", null, "en"))
+        assertNull(nativeBitmapGroupIndex(groups, ordinal = 0, language = "en"))
+        assertNull(nativeBitmapGroupIndex(emptyList(), ordinal = 0, language = "en"))
+    }
+
+    @Test
+    fun `an ordinal past the end of the container's bitmap tracks has no match`() {
+        val groups = listOf(TextTrackInfo("application/vobsub", null, "de"))
+        assertNull(nativeBitmapGroupIndex(groups, ordinal = 2, language = "en"))
     }
 }
