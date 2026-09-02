@@ -1106,6 +1106,9 @@ private fun PlayerContent(
                             }
                         },
                     )
+                    // White-with-outline instead of the platform's
+                    // white-on-black-box default — see TEXT_SUBTITLE_STYLE.
+                    subtitleView?.setStyle(TEXT_SUBTITLE_STYLE)
                     resizeMode = RESIZE_MODES[resizeModeIndex].first
                     // Taps reach performClick via the gesture detector's
                     // onSingleTapUp (see above), satisfying the
