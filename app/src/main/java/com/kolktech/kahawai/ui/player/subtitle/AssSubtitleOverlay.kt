@@ -54,6 +54,22 @@ private const val TAG = "AssSubtitleOverlay"
 /// never muxed into the HLS stream — so there's no such event to hook;
 /// header/dialogue are read straight off our own HTTP stream instead,
 /// same as JASSUB is fed on the web.
+/// Whether a [renderFrame] answer replaces what is on screen.
+///
+/// The two "nothing to draw" answers are not the same thing. `changed == 0`
+/// is libass's detect_change saying THIS frame is identical to the last one,
+/// so the previous images stay up — that is the cheap no-op the render loop
+/// runs at display rate. A null frame is the opposite: there is nothing to
+/// show at this timestamp at all, and the previous images must come DOWN.
+///
+/// Keeping the last frame on null is what made a cue linger past its end
+/// timestamp until the next one happened to replace it. The library's own
+/// view does exactly this (AssSubtitleCanvasView assigns a null frame
+/// straight through and only skips on `changed == 0`); this pipeline draws
+/// into Compose instead of that view, so it has to make the same call
+/// itself.
+internal fun assFrameShouldApply(result: AssFrame?): Boolean = result == null || result.changed != 0
+
 @Composable
 fun AssSubtitleOverlay(
     player: Player,
@@ -288,7 +304,7 @@ fun AssSubtitleOverlay(
                             // desyncing subtitles after every seek/resume.
                             val t = player.currentPosition
                             val result = withContext(Dispatchers.Default) { assRender.renderFrame(t, AssTexType.BITMAP_ALPHA) }
-                            if (result != null && result.changed != 0) frame = result
+                            if (assFrameShouldApply(result)) frame = result
                         }
                     }
                 }
