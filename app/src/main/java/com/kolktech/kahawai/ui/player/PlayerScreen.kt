@@ -415,6 +415,7 @@ private fun PlayerContent(
     val selectedSubtitle by viewModel.selectedSubtitleTrack.collectAsState()
     val subtitleSession by viewModel.subtitleSession.collectAsState()
     val transientError by viewModel.transientError.collectAsState()
+    val hdrActive by viewModel.hdrActive.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val segments by viewModel.segments.collectAsState()
     val chapters by viewModel.chapters.collectAsState()
@@ -1148,6 +1149,17 @@ private fun PlayerContent(
         // Nothing relayouts when the controls fade in or out, so the text
         // renderer's padding is re-applied here; the overlays take the same
         // inset as a parameter and shift their own cues.
+        // White-with-outline instead of the platform's white-on-black-box
+        // default, dimmed to BT.2408 reference white while the picture is
+        // HDR — see TEXT_SUBTITLE_STYLE / TEXT_SUBTITLE_STYLE_HDR. Keyed on
+        // hdrActive because the same item plays either way: the hub tone
+        // maps when the profile says this device cannot take HDR, and a
+        // session restart can renegotiate mid-item.
+        LaunchedEffect(hdrActive, playerView) {
+            playerView?.subtitleView?.setStyle(
+                if (hdrActive) TEXT_SUBTITLE_STYLE_HDR else TEXT_SUBTITLE_STYLE,
+            )
+        }
         LaunchedEffect(cueInsetPx, playerView) {
             playerView?.let { applyCueBottomPadding(it, cueInsetPx) }
         }
