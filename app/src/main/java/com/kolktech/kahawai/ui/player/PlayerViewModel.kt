@@ -20,6 +20,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +38,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.kolktech.kahawai.R
 import com.kolktech.kahawai.data.network.ApiClient
+import com.kolktech.kahawai.data.network.dto.CapabilityProfile
 import com.kolktech.kahawai.data.network.dto.Chapter
 import com.kolktech.kahawai.data.network.dto.Item
 import com.kolktech.kahawai.data.network.dto.Pref
@@ -447,6 +449,34 @@ class PlayerViewModel(
         )
         ExoPlayer.Builder(getApplication())
             .setMediaSourceFactory(buildPlayerMediaSourceFactory(dataSourceFactory))
+            // Media3's defaults (~15s minBuffer, 5s bufferForPlaybackAfterRebuffer)
+            // assume a source that can be downloaded far ahead of playback.
+            // A remux/transcode session is the opposite: the hub is
+            // encoding the HLS EVENT playlist in close to real time (see
+            // attach()'s targetOffsetMs note), so its production lead over
+            // the playhead is often just a few seconds, especially right
+            // after a session starts or right after auto-advance starts a
+            // new session while the hub is still tearing the previous one
+            // down. Holding out for 15s of buffer that the hub simply
+            // hasn't produced yet is what showed up as repeated
+            // "loading" flashes at the start of a video (worse right after
+            // auto-advance, where the hub's lead is thinnest) — the
+            // player buffers, catches up to the produced edge, stalls,
+            // and re-buffers, several times over, before the hub's lead
+            // widens enough to clear the default threshold. Shorter
+            // targets let it resume as soon as a realistic amount of
+            // media is actually available instead of chasing an
+            // unreachable buffer floor.
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        /* minBufferMs = */ 10_000,
+                        DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
+                        /* bufferForPlaybackMs = */ 1_000,
+                        /* bufferForPlaybackAfterRebufferMs = */ 1_500,
+                    )
+                    .build(),
+            )
             // handleAudioFocus=true so ExoPlayer pauses itself on transient
             // audio focus loss (e.g. an incoming call ringing) and resumes
             // when focus is returned, without us wiring up an AudioManager
@@ -525,7 +555,7 @@ class PlayerViewModel(
             override fun getContentDuration(): Long = contentDurationOrSuper()
 
             private fun contentDurationOrSuper(): Long =
-                session?.takeIf { it.mode != "direct" }?.durationMs ?: super.getDuration()
+                if (isDirect) super.getDuration() else session?.durationMs ?: super.getDuration()
 
             /// Companions to getDuration() above: PlayerControlView reads
             /// getContentPosition()/getContentBufferedPosition() (a
@@ -547,7 +577,7 @@ class PlayerViewModel(
             override fun getContentPosition(): Long = contentPositionOrSuper()
 
             private fun contentPositionOrSuper(): Long =
-                if (session?.mode == "direct") super.getCurrentPosition() else offsetMs + realPlayer.currentPosition
+                if (isDirect) super.getCurrentPosition() else offsetMs + realPlayer.currentPosition
 
             override fun getBufferedPosition(): Long = contentBufferedPositionOrSuper()
 
@@ -566,14 +596,14 @@ class PlayerViewModel(
             /// end. The downloaded position stays the floor for the moment
             /// before the playlist's length is known.
             private fun contentBufferedPositionOrSuper(): Long {
-                if (session?.mode == "direct") return super.getDuration()
+                if (isDirect) return super.getDuration()
                 val downloadedMs = offsetMs + realPlayer.bufferedPosition
                 val producedMs = realPlayer.duration.takeIf { it != C.TIME_UNSET } ?: return downloadedMs
                 return maxOf(downloadedMs, offsetMs + producedMs)
             }
 
             override fun isCurrentMediaItemSeekable(): Boolean =
-                if (session?.mode != "direct") true else super.isCurrentMediaItemSeekable()
+                if (isDirect) super.isCurrentMediaItemSeekable() else true
 
             /// ExoPlayer's own live detection (no #EXT-X-ENDLIST while
             /// the hub is still producing, see attach()'s
@@ -595,12 +625,22 @@ class PlayerViewModel(
             /// state, period ids/uids, window count) untouched passthrough.
             override fun getCurrentTimeline(): Timeline {
                 val real = super.getCurrentTimeline()
-                if (real.isEmpty) return real
-                val total = session?.takeIf { it.mode != "direct" }?.durationMs ?: return real
+                if (real.isEmpty || isDirect) return real
+                val total = session?.durationMs ?: return real
                 return DurationOverrideTimeline(real, total * 1000L)
             }
         }
     }
+
+    /// Whether the current session serves the file's own byte-range
+    /// timeline directly, rather than a growing HLS playlist from a
+    /// remux/transcode pipeline. Centralised here because the ForwardingPlayer
+    /// overrides below used to each spell `session?.mode == "direct"`
+    /// slightly differently (==, !=, takeIf) — harmless today, but exactly
+    /// the kind of repetition where a future fix lands in five of the six
+    /// spots and not the sixth.
+    private val isDirect: Boolean
+        get() = session?.mode == "direct"
 
     /// The audio stream every start of this item uses — resolved once from
     /// the preferences (see start()) and then held, so a recovery restart
@@ -618,7 +658,7 @@ class PlayerViewModel(
     /// SeekWindowTimeBar reads this live to shade the bar; the range's end
     /// is player.bufferedPosition.
     val seekWindowStartMs: Long
-        get() = if (session?.mode == "direct") 0 else offsetMs
+        get() = if (isDirect) 0 else offsetMs
 
     private var session: StartSessionResponse? = null
     private var offsetMs: Long = 0
@@ -739,6 +779,60 @@ class PlayerViewModel(
         start()
     }
 
+    /// Starts a fresh hub session at [positionMs] and attaches the player
+    /// to it: negotiates the session, adopts its subtitle listing (see
+    /// [applySessionSubtitleListing]), resolves [offsetMs]/startPositionMs
+    /// via [resumePlan], and [attach]es. start(), attemptSessionRecovery()
+    /// and restartSessionWithSubtitle() all do exactly this dance, just
+    /// wrapped in different error handling — pulled out once so a fix to
+    /// any step here (there have been several) lands in one place instead
+    /// of needing to be copied into three.
+    ///
+    /// offsetMs is set to the ABSOLUTE position this run's playlist starts
+    /// at, i.e. [positionMs] itself (confirmed against the hub:
+    /// execute_seek/start() always hands the pipeline local_ms = abs_ms -
+    /// part.base_ms, and the produced playlist's own t=0 is exactly that
+    /// local_ms — so in absolute terms, t=0 always equals the FULL
+    /// requested position, not just the multi-part remainder).
+    /// startPositionMs is correspondingly always 0 for a non-direct
+    /// session: this fresh playlist's own beginning IS where we asked the
+    /// pipeline to start, mirroring the web client's unconditional
+    /// `startPosition: 0` for hls.js. syncOrigin() (kicked off from
+    /// attach()) refines offsetMs once the true keyframe-snapped origin is
+    /// known; it doesn't touch startPositionMs, which never needs
+    /// correcting.
+    ///
+    /// "direct" mode is the opposite arrangement: the file's native
+    /// timeline IS absolute, so offsetMs must stay 0 (offsetMs +
+    /// currentPosition is how every absolute position is reconstructed —
+    /// progress reports, the seek overrides, subtitle shift) and resuming
+    /// partway is a real player seek to [positionMs], not a pipeline
+    /// restart. See [resumePlan].
+    private suspend fun startSessionAndAttach(
+        profile: CapabilityProfile,
+        positionMs: Long,
+        subtitleTrackId: Long?,
+    ): StartSessionResponse {
+        val newSession = repo.startSession(
+            itemId,
+            profile,
+            positionMs,
+            audioTrack = audioTrack,
+            subtitleTrack = subtitleTrackId,
+        )
+        session = newSession
+        applySessionSubtitleListing(newSession)
+        Log.d(
+            TAG,
+            "session started item=$itemId requestedPositionMs=$positionMs mode=${newSession.mode} " +
+                "durationMs=${newSession.durationMs} partBaseMs=${newSession.partBaseMs}",
+        )
+        val plan = resumePlan(newSession.mode, positionMs)
+        offsetMs = plan.offsetMs
+        attach(newSession, startPositionMs = plan.startPositionMs, requestedAbsMs = positionMs)
+        return newSession
+    }
+
     private fun start() {
         _state.value = PlayerState.Loading
         viewModelScope.launch {
@@ -848,59 +942,9 @@ class PlayerViewModel(
                     "tracks resolved item=$itemId series=$seriesId library=$libraryId " +
                         "audio=$audioTrack subtitle=${initialTrack?.id} (carried sub=$initialSubtitleTrackId)",
                 )
-                val session = repo.startSession(
-                    itemId,
-                    profile,
-                    startMs,
-                    audioTrack = audioTrack,
-                    subtitleTrack = burnPickOrNull(initialTrack),
-                )
-                this@PlayerViewModel.session = session
-                applySessionSubtitleListing(session)
-                Log.d(
-                    TAG,
-                    "session started item=$itemId requestedStartMs=$startMs mode=${session.mode} " +
-                        "durationMs=${session.durationMs} partBaseMs=${session.partBaseMs}",
-                )
-                // offsetMs reconstructs the absolute video position from
-                // ExoPlayer's own (playlist-local) currentPosition
-                // elsewhere (reportProgressNow, the seek overrides,
-                // subtitle timing) — it must be the ABSOLUTE position
-                // this run's playlist starts at, i.e. startMs itself
-                // (confirmed against the hub: execute_seek/start()
-                // always hands the pipeline local_ms = abs_ms -
-                // part.base_ms, and the produced playlist's own t=0 is
-                // exactly that local_ms — so in absolute terms, t=0
-                // always equals the FULL requested position, not just
-                // the multi-part remainder). session.partBaseMs is a
-                // different, mostly-irrelevant-here concept (multi-part
-                // timeline stitching, 0 for virtually all content) that
-                // this used to read into offsetMs instead — every prior
-                // test happened to use startMs=0, where 0 and
-                // partBaseMs(0) are indistinguishable, which is exactly
-                // why this went unnoticed until a real seek target
-                // exposed it. startPositionMs is correspondingly always
-                // 0: this fresh playlist's own beginning IS where we
-                // asked the pipeline to start, mirroring the web
-                // client's unconditional `startPosition: 0` for hls.js.
-                // syncOrigin() below refines offsetMs once the true
-                // keyframe-snapped origin is known; it doesn't touch
-                // startPositionMs, which never needed correcting.
-                //
-                // "direct" mode is the opposite arrangement: the file's
-                // native timeline IS absolute, so offsetMs must stay 0
-                // (offsetMs + currentPosition is how every absolute
-                // position is reconstructed — progress reports, the
-                // seek overrides, subtitle shift) and resuming partway
-                // is a real player seek to startMs, not a pipeline
-                // restart. The previous code applied the HLS recipe
-                // (offsetMs = startMs, startPositionMs = 0) to direct
-                // too, which both started resumed playback from the
-                // beginning AND reported/rendered everything shifted by
-                // startMs.
-                val plan = resumePlan(session.mode, startMs)
-                offsetMs = plan.offsetMs
-                attach(session, startPositionMs = plan.startPositionMs, requestedAbsMs = startMs)
+                // See startSessionAndAttach's doc for the offsetMs/
+                // startPositionMs reasoning (direct vs remux/transcode).
+                startSessionAndAttach(profile, startMs, burnPickOrNull(initialTrack))
                 _state.value = PlayerState.Ready
                 startProgressLoop()
             } catch (e: Exception) {
@@ -946,18 +990,7 @@ class PlayerViewModel(
         viewModelScope.launch {
             try {
                 val profile = CapabilityProfileBuilder.build(getApplication())
-                val newSession = repo.startSession(
-                    itemId,
-                    profile,
-                    positionMs,
-                    audioTrack = audioTrack,
-                    subtitleTrack = burnPickOrNull(_selectedSubtitleTrack.value),
-                )
-                session = newSession
-                applySessionSubtitleListing(newSession)
-                val plan = resumePlan(newSession.mode, positionMs)
-                offsetMs = plan.offsetMs
-                attach(newSession, startPositionMs = plan.startPositionMs, requestedAbsMs = positionMs)
+                val newSession = startSessionAndAttach(profile, positionMs, burnPickOrNull(_selectedSubtitleTrack.value))
                 _state.value = PlayerState.Ready
                 recoveryAttempted = false
                 Log.w(TAG, "session recovery succeeded item=$itemId newSessionId=${newSession.sessionId}")
@@ -1215,22 +1248,10 @@ class PlayerViewModel(
                 val positionMs = offsetMs + realPlayer.currentPosition
                 val profile = CapabilityProfileBuilder.build(getApplication())
                 val oldSessionId = session?.sessionId
-                val newSession = repo.startSession(
-                    itemId,
-                    profile,
-                    positionMs,
-                    audioTrack = audioTrack,
-                    subtitleTrack = subtitleTrackId,
-                )
-                session = newSession
-                applySessionSubtitleListing(newSession)
-                // See start()'s comment on offsetMs/startPositionMs —
-                // and un-picking a burn can legitimately come back as a
-                // "direct" session, so both arrangements are reachable
-                // here.
-                val plan = resumePlan(newSession.mode, positionMs)
-                offsetMs = plan.offsetMs
-                attach(newSession, startPositionMs = plan.startPositionMs, requestedAbsMs = positionMs)
+                // See startSessionAndAttach's doc on offsetMs/startPositionMs
+                // — un-picking a burn can legitimately come back as a
+                // "direct" session, so both arrangements are reachable here.
+                val newSession = startSessionAndAttach(profile, positionMs, subtitleTrackId)
                 internalPause = false
                 if (oldSessionId != null && oldSessionId != newSession.sessionId) {
                     launch {
@@ -1520,7 +1541,7 @@ class PlayerViewModel(
     private fun applySubtitleTrackSelectionOverride() {
         val selected = _selectedSubtitleTrack.value
         val textTrack = selected?.takeIf { it.delivery == "text" }
-        val bitmapTrack = selected?.takeIf { isNativeBitmapPick(it, session?.mode == "direct") }
+        val bitmapTrack = selected?.takeIf { isNativeBitmapPick(it, isDirect) }
         val params = realPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             // Disabled unless a pick this pipeline renders is live — see the
